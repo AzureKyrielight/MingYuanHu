@@ -1,0 +1,60 @@
+name: Release Windows installer
+
+# 推 v* tag（或手动指定 tag）即构建 Windows 10/11 x64 的 NSIS 安装包，
+# 并上传到 GitHub Release；electron-builder 同时生成 latest.yml 供应用内更新使用。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing version tag to publish (for example, v0.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-windows-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Build and publish win-x64
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - uses: pnpm/action-setup@v6
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Check (format, lint, typecheck, tests)
+        run: pnpm check
+      - name: Prepare bundled runtime (MinGit / helper)
+        run: pnpm prepare:runtime
+      - name: Build and publish NSIS installer
+        run: pnpm exec electron-builder --win nsis --x64 --publish always
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: installer-win-x64
+          path: |
+            dist/MingYuanHu-Setup-*.exe
+            dist/MingYuanHu-Setup-*.exe.blockmap
+            dist/latest.yml
+          if-no-files-found: error

@@ -1,0 +1,105 @@
+appId: io.mingyuanhu.desktop
+productName: 明远湖光
+artifactName: 'MingYuanHu-${version}-${os}-${arch}.${ext}'
+icon: assets/Dela_white_bg.png
+asar: true
+directories:
+  output: dist
+files:
+  - out/main/**/*
+  - out/preload/**/*
+  - out/renderer/**/*
+  - package.json
+  - assets/Dela_white_bg.png
+  - assets/Dela_black_bg.png
+  # 渲染层依赖已移入 devDependencies，由 Vite 打进 out/；
+  # 下面只兜底排除依赖收集中漏进产物或带全平台 prebuild 的部分。
+  # esbuild 是 Vite 的构建期工具，electron-builder 的 pnpm 依赖收集会漏收它。
+  - '!node_modules/@esbuild/**'
+  # native prebuild 按当前发布矩阵（win x64 / mac arm64）只保留目标平台
+  - '!node_modules/better-sqlite3/prebuilds/darwin-x64.node'
+  - '!node_modules/better-sqlite3/prebuilds/linux*'
+  - '!node_modules/better-sqlite3/prebuilds/win32-arm64.node'
+  - '!node_modules/node-pty/prebuilds/darwin-x64'
+  - '!node_modules/node-pty/prebuilds/linux*'
+  - '!node_modules/node-pty/prebuilds/win32-arm64'
+# Chromium 自带 55 种语言包（约 49MB），产品只面向中英文
+electronLanguages:
+  - en-US
+  - zh-CN
+  - zh-TW
+asarUnpack:
+  - node_modules/better-sqlite3/**/*
+  - node_modules/node-pty/**/*
+  # 引导开场的可选视频；文件不存在时该行无副作用
+  - out/renderer/assets/*.mp4
+extraResources:
+  # 远端 helper 的静态二进制：Dela 上传到远端后经 ssh -L 隧道访问（主进程按 resources/dela-helper 探测）
+  - from: vendor/dela-helper
+    to: dela-helper
+    filter:
+      - 'dela-helper-*'
+  # 两端共用搜索工具的来源与许可证；可执行文件按平台选择。
+  - from: vendor/bin
+    to: bin
+    filter:
+      - 'LICENSE-*.txt'
+      - 'README.md'
+npmRebuild: false
+win:
+  icon: assets/MingYuanHu.ico
+  extraResources:
+    - from: vendor/openssh
+      to: openssh
+      filter:
+        - 'ssh.exe'
+        - 'libcrypto.dll'
+        - 'LICENSE.txt'
+        - 'NOTICE.txt'
+        - 'README.md'
+    - from: .build/mingit
+      to: mingit
+    - from: vendor/bin
+      to: bin
+      filter:
+        - '*.exe'
+  target:
+    - target: nsis
+      arch:
+        - x64
+mac:
+  icon: out/main/icons/Dela_white_bg.png
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+      arch:
+        - arm64
+    - target: zip
+      arch:
+        - arm64
+  extraResources:
+    - from: 'vendor/bin/darwin-${arch}'
+      to: 'bin/darwin-${arch}'
+      filter:
+        - 'rg'
+        - 'fd'
+nsis:
+  include: build/installer.nsh
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: 明远湖光
+  uninstallDisplayName: 明远湖光
+  differentialPackage: true
+  artifactName: 'MingYuanHu-Setup-${version}.${ext}'
+
+# 应用内更新：读取 GitHub Releases 的 latest.yml。发布时需要带 GH_TOKEN 执行
+# pnpm package:publish（或 electron-builder --publish always）。
+publish:
+  provider: github
+  owner: AzureKyrielight
+  repo: MingYuanHu
+  releaseType: release
