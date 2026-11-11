@@ -5,6 +5,11 @@
   "description": "面向四川大学的本地优先校园工作台",
   "author": "MingYuanHu contributors",
   "license": "AGPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AzureKyrielight/MingYuanHu.git"
+  },
+  "homepage": "https://github.com/AzureKyrielight/MingYuanHu",
   "type": "module",
   "main": "out/main/index.cjs",
   "packageManager": "pnpm@12.3.4",
