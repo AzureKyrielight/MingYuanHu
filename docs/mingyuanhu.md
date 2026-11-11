@@ -51,8 +51,13 @@ pnpm package:win      # 本机生成 dist/MingYuanHu-Setup-<版本>.exe
 
 推 `v*` tag（或手动触发）会运行 `.github/workflows/windows-release.yml`：
 在 `windows-2022` 上安装依赖 → `pnpm check` → `pnpm prepare:runtime` →
-`electron-builder --win nsis --x64 --publish always`，把安装包与 `latest.yml` 上传到 Release。
+`electron-builder --win nsis --x64 --publish never`，再用 `gh release create/upload`
+把安装包、`.blockmap` 与 `latest.yml` 一次性挂到 Release。
 Dela 的 `release.yml` 也是先 `--publish never` 再用 `gh release create/upload`，效果一致。
+
+> 为什么不直接用 `--publish always`：electron-builder 并行上传资产时可能在同一 tag 下
+> 创建出两个 Release（一个只有 `.blockmap`），Releases 页面会看起来「没有 exe」。
+> 交给 `gh` 单次发布可以避免这种竞态。
 
 > 本机打包如果卡在 `downloading nsis-resources` / Unpacking Electron，是 electron-builder 的
 > 缓存锁问题，与项目配置无关：可加 `-c.electronDist=node_modules/electron/dist` 复用已安装的

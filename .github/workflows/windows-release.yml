@@ -47,8 +47,28 @@ jobs:
         run: pnpm check
       - name: Prepare bundled runtime (MinGit / helper)
         run: pnpm prepare:runtime
-      - name: Build and publish NSIS installer
-        run: pnpm exec electron-builder --win nsis --x64 --publish always
+      - name: Build NSIS installer
+        # 与上游 Dela 一致：只构建，不在 electron-builder 内部发布。
+        # electron-builder 并发上传资产时可能创建出多个同名 tag 的 Release，
+        # 导致 Releases 页面出现只有 .blockmap 的重复条目；改由 gh 一次性发布。
+        run: pnpm exec electron-builder --win nsis --x64 --publish never
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = '${{ inputs.tag || github.ref_name }}'
+          $files = @(Get-ChildItem dist -File |
+            Where-Object { $_.Name -like 'MingYuanHu-Setup-*' } |
+            ForEach-Object { $_.FullName })
+          if ($files.Count -eq 0) { throw 'No installer artifacts found in dist' }
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag @files --clobber
+          } else {
+            gh release create $tag @files --title $tag --notes 'Windows 10/11 x64 installer'
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'gh release failed' }
       - name: Upload build artifacts
         uses: actions/upload-artifact@v6
         with:
