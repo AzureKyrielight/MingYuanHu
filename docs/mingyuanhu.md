@@ -33,6 +33,32 @@
   运行一次 `powershell -ExecutionPolicy Bypass -File scripts/create-desktop-shortcut.ps1`
   会在桌面生成「明远湖光」快捷方式（图标取本机 Electron）。
 
+## Windows 安装包（与 Dela 相同的封装方式）
+
+上游 Dela 的安装包就是 electron-builder 的 NSIS 目标，本仓库沿用同一份 `electron-builder.yml`：
+
+- `files` 只打包 `out/main`、`out/preload`、`out/renderer` 与 `package.json`，图标同时带上；
+- `asar: true`，`better-sqlite3` / `node-pty` 通过 `asarUnpack` 解包；
+- `electronLanguages` 只保留中英文，`win.target: nsis x64`，`nsis.include: build/installer.nsh`（安装向导文案）；
+- `extraResources` 额外带上 MinGit、OpenSSH、`rg`/`fd` 与远端 helper；
+- `publish` 指向本仓库的 GitHub Releases，`latest.yml` + `.blockmap` 供应用内更新使用。
+
+构建入口：
+
+```powershell
+pnpm package:win      # 本机生成 dist/MingYuanHu-Setup-<版本>.exe
+```
+
+推 `v*` tag（或手动触发）会运行 `.github/workflows/windows-release.yml`：
+在 `windows-2022` 上安装依赖 → `pnpm check` → `pnpm prepare:runtime` →
+`electron-builder --win nsis --x64 --publish always`，把安装包与 `latest.yml` 上传到 Release。
+Dela 的 `release.yml` 也是先 `--publish never` 再用 `gh release create/upload`，效果一致。
+
+> 本机打包如果卡在 `downloading nsis-resources` / Unpacking Electron，是 electron-builder 的
+> 缓存锁问题，与项目配置无关：可加 `-c.electronDist=node_modules/electron/dist` 复用已安装的
+> Electron，并清理 `%LOCALAPPDATA%\electron-builder\Cache` 下的 `*.lock` 目录后重试；
+> CI 上不会遇到。
+
 ## 排障笔记
 
 - **教务处通知乱码**：`jwc.scu.edu.cn` 现在是 UTF-8（早前误按 GB18030 解码导致整页乱码）。
