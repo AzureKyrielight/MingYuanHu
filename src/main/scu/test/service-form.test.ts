@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildServiceFormData,
   buildServiceSchema,
+  dateOrderViolations,
   defaultServiceValues,
   evaluateCondition,
   fieldTypeFromKey,
@@ -258,6 +259,8 @@ describe('serializeFieldValue', () => {
     required: false,
     readOnly: false,
     suppressed: false,
+    dataSource: null,
+    dateRule: null,
   });
 
   it('单选/多选/下拉按协议结构输出', () => {
@@ -290,5 +293,183 @@ describe('serializeFieldValue', () => {
       details: '某路 1 号',
       address: '四川省/成都市/武侯区/某路 1 号',
     });
+  });
+});
+
+describe('ShowHide 真实协议（conkey 为条件序号）', () => {
+  const schema = buildServiceSchema(
+    'app-real',
+    {
+      id: '1419',
+      form_version_id: '77',
+      plugins: {
+        Radio_30: plugin('Radio_30', 'dRadio', {
+          options: [
+            { value: '1', name: '是' },
+            { value: '0', name: '否' },
+          ],
+        }),
+        Input_31: plugin('Input_31', 'dInput'),
+        ShowHide_90: {
+          key: 'ShowHide_90',
+          type: 'dShowHide',
+          attr: {
+            data: {
+              conditions: [
+                { name: '默认', expression: 'true' },
+                { name: '选是', expression: '{p_Radio_30}==1' },
+              ],
+              controls: [
+                {
+                  conkey: '0',
+                  setInfo: { isShow: 0, isRequired: 0, plugins: ['Input_31'] },
+                },
+                {
+                  conkey: '1',
+                  setInfo: { isShow: 1, isRequired: 1, plugins: ['Input_31'] },
+                },
+              ],
+            },
+          },
+        },
+      },
+    },
+    {
+      formId: '1419',
+      auth: { Radio_30: 'writable', Input_31: 'writable', ShowHide_90: 'writable' },
+      data: {},
+    },
+  );
+
+  it('条件序号 0（默认）隐藏字段，序号 1（选是）显示并必填', () => {
+    const data = buildServiceFormData(schema, { Radio_30: '0', Input_31: '去向' });
+    expect(data['1419']!.Input_31).toBe('');
+    const shown = buildServiceFormData(schema, { Radio_30: '1', Input_31: '去向' });
+    expect(shown['1419']!.Input_31).toBe('去向');
+    const missing = missingRequiredFields(schema, { Radio_30: '1', Input_31: '' });
+    expect(missing.map((field) => field.key)).toContain('Input_31');
+  });
+});
+
+describe('DataSource 联动', () => {
+  const withDataSource = buildServiceSchema(
+    'app-ds',
+    {
+      id: '1419',
+      form_version_id: '77',
+      plugins: {
+        DataSource_85: plugin('DataSource_85', 'dDataSource', {
+          sourceid: '8',
+          resultKey: 'Input_31',
+        }),
+        Input_31: plugin('Input_31', 'dInput'),
+      },
+    },
+    {
+      formId: '1419',
+      auth: { DataSource_85: 'writable', Input_31: 'writable' },
+      data: {},
+    },
+  );
+
+  it('解析取数配置并配对写入结果', () => {
+    const source = findField(withDataSource, 'DataSource_85');
+    expect(source?.dataSource).toMatchObject({ id: '8', resultKey: 'Input_31' });
+    const data = buildServiceFormData(withDataSource, {
+      DataSource_85: '20260001',
+      Input_31: '',
+    });
+    expect(data['1419']).toEqual({
+      DataSource_85: { list: '20260001' },
+      Input_31: '20260001',
+    });
+  });
+
+  it('取数为空时整对省略', () => {
+    const data = buildServiceFormData(withDataSource, {
+      DataSource_85: '',
+      Input_31: '',
+    });
+    expect(data['1419']).toEqual({});
+  });
+});
+
+describe('ShowHide 表达式特判', () => {
+  const values: Record<string, string> = {
+    Calendar_40: '2026-08-10T09:00',
+    Calendar_41: '2026-08-11T09:00',
+    Select_7: 'a,b',
+    Radio_2: '1',
+  };
+  const valueOf = (key: string) => values[key] ?? '';
+
+  it('支持 new Date(...) 比较与空串比较', () => {
+    expect(
+      evaluateCondition(`new Date({p_Calendar_40})<=new Date('2026-08-11T09:00')`, valueOf),
+    ).toBe(true);
+    expect(
+      evaluateCondition(`new Date({p_Calendar_41})>new Date('2026-08-11T09:00')`, valueOf),
+    ).toBe(false);
+    expect(evaluateCondition(`{p_Missing}==''`, valueOf)).toBe(true);
+    expect(evaluateCondition(`{p_Radio_2}!=''`, valueOf)).toBe(true);
+  });
+
+  it('支持 indexOf/includes 与 [0].value 比较', () => {
+    expect(evaluateCondition(`{p_Select_7}.indexOf('a')!==-1`, valueOf)).toBe(true);
+    expect(evaluateCondition(`{p_Select_7}.indexOf('z')==-1`, valueOf)).toBe(true);
+    expect(evaluateCondition(`{p_Select_7}.includes('b')`, valueOf)).toBe(true);
+    expect(evaluateCondition(`{p_Radio_2}[0].value=='1'`, valueOf)).toBe(true);
+    expect(evaluateCondition(`{p_Radio_2}[0].value!='0'`, valueOf)).toBe(true);
+  });
+
+  it('无括号的 || 复合表达式逐段求值', () => {
+    expect(evaluateCondition(`{p_Radio_2}=='0' || {p_Radio_2}=='1'`, valueOf)).toBe(true);
+  });
+});
+
+describe('日期顺序校验', () => {
+  it('开始晚于结束时给出违规信息', () => {
+    const schema = buildServiceSchema(
+      'app-date',
+      {
+        id: '9',
+        plugins: {
+          Calendar_40: plugin('Calendar_40', 'dCalendar'),
+          Calendar_41: plugin('Calendar_41', 'dCalendar'),
+          Validate_91: {
+            key: 'Validate_91',
+            type: 'dValidate',
+            attr: {
+              data: {
+                rule: '{f_dateDayMinus}({p_Calendar_40},{p_Calendar_41})<0',
+                alert: '开始日期不能晚于结束日期',
+              },
+            },
+          },
+        },
+      },
+      {
+        formId: '9',
+        auth: { Calendar_40: 'writable', Calendar_41: 'writable', Validate_91: 'writable' },
+        data: {},
+      },
+    );
+    const violations = dateOrderViolations(schema, {
+      Calendar_40: '2026-08-12T00:00',
+      Calendar_41: '2026-08-11T00:00',
+    });
+    expect(violations).toEqual([
+      {
+        firstKey: 'Calendar_40',
+        secondKey: 'Calendar_41',
+        message: '开始日期不能晚于结束日期',
+      },
+    ]);
+    expect(
+      dateOrderViolations(schema, {
+        Calendar_40: '2026-08-10T00:00',
+        Calendar_41: '2026-08-11T00:00',
+      }),
+    ).toEqual([]);
   });
 });

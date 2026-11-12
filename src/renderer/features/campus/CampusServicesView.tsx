@@ -710,6 +710,60 @@ function CardPanel() {
   );
 }
 
+const applicationText = (value: unknown): string =>
+  value === null || value === undefined ? '' : String(value);
+
+interface ApplicationRow {
+  readonly name: string;
+  readonly status: string;
+  readonly created: string;
+  readonly instId: string;
+}
+
+/** inst-list 行 → 可读字段：app_name 事项名、inst_status 中文状态、created 提交时间。 */
+function mapApplication(raw: unknown): ApplicationRow {
+  const value = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+  return {
+    name:
+      applicationText(value.app_name) ||
+      applicationText(value.desc) ||
+      applicationText(value.title) ||
+      '未命名事项',
+    status: applicationText(value.inst_status) || applicationText(value.status) || '—',
+    created: applicationText(value.created) || '—',
+    instId: applicationText(value.inst_id) || '—',
+  };
+}
+
+function ApplicationsTable({ value }: { value: unknown }) {
+  const rows = (Array.isArray(value) ? value : []).map(mapApplication);
+  if (rows.length === 0) return <p className="text-xs text-ink-3">暂无申请记录</p>;
+  return (
+    <div className="overflow-auto rounded-lg border border-line">
+      <table className="w-full min-w-max border-collapse text-sm">
+        <thead className="bg-inset text-left text-xs text-ink-3">
+          <tr>
+            <th className="whitespace-nowrap px-3 py-2 font-medium">事项</th>
+            <th className="whitespace-nowrap px-3 py-2 font-medium">状态</th>
+            <th className="whitespace-nowrap px-3 py-2 font-medium">提交时间</th>
+            <th className="whitespace-nowrap px-3 py-2 font-medium">实例号</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, index) => (
+            <tr key={`${row.instId}-${index}`} className="border-t border-line/70">
+              <td className="max-w-[22rem] truncate px-3 py-2 text-ink-2">{row.name}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-ink-2">{row.status}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-ink-2">{row.created}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-ink-2">{row.instId}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function ServicePanel() {
   const [status, setStatus] = useState(0);
   const [page, setPage] = useState(1);
@@ -761,7 +815,8 @@ function ServicePanel() {
           下一页
         </Button>
       </div>
-      {result && (result.ok ? <DataTable value={result.data} /> : <ErrorText result={result} />)}
+      {result &&
+        (result.ok ? <ApplicationsTable value={result.data} /> : <ErrorText result={result} />)}
     </Panel>
   );
 }

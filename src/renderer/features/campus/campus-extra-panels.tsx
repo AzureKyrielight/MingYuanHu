@@ -30,10 +30,17 @@ interface ServiceField {
   maxCount: number;
 }
 
+interface ServiceRegionNode {
+  label: string;
+  value: string;
+  children: ServiceRegionNode[];
+}
+
 interface ServiceSchema {
   formId: string;
   fields: ServiceField[];
   appId: string;
+  regions: ServiceRegionNode[];
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -76,6 +83,8 @@ function ErrorLine({ message }: { message: string | null }) {
 
 // ─── 办事大厅动态表单 ────────────────────────────────────────────
 
+// 不渲染的字段类型：布局/逻辑占位与人员/联动字段（与主进程 editableFields 一致，
+// dataSource 除外——需要用户输入查询名称，提交时自动带出配对字段）。
 const SKIP_TYPES = new Set([
   'text',
   'image',
@@ -84,6 +93,9 @@ const SKIP_TYPES = new Set([
   'validate',
   'variate',
   'conversion',
+  'repeatTable',
+  'user',
+  'unknown',
 ]);
 
 export function ServiceStartCard() {
@@ -200,9 +212,16 @@ export function ServiceStartCard() {
                 {field.label || field.key}
                 {field.required ? <span className="ml-0.5 text-red">*</span> : null}
               </span>
-              {renderField(field, values[field.key], attachments[field.key], (value) =>
-                setValue(field.key, value),
+              {renderField(
+                field,
+                values[field.key],
+                attachments[field.key],
+                schema?.regions ?? [],
+                (value) => setValue(field.key, value),
               )}
+              {field.type === 'dataSource' && !field.hint ? (
+                <span className="text-xs text-ink-3">输入查询值后提交时自动带出相关信息</span>
+              ) : null}
               {field.type === 'file' ? (
                 <div className="flex items-center gap-2">
                   <Button
@@ -234,6 +253,7 @@ function renderField(
   field: ServiceField,
   value: unknown,
   files: { name: string }[] | undefined,
+  regions: ServiceRegionNode[],
   onChange: (value: unknown) => void,
 ) {
   switch (field.type) {
@@ -307,6 +327,82 @@ function renderField(
           {files?.length ? `已上传 ${files.length} 个` : '尚未选择文件'}
         </span>
       );
+    case 'region': {
+      const selection = isRecord(value) ? value : {};
+      const part = (key: string) => (isRecord(selection[key]) ? selection[key] : {});
+      const provinceValue = textOf(part('province').value);
+      const cityValue = textOf(part('city').value);
+      const areaValue = textOf(part('area').value);
+      const cities = regions.find((node) => node.value === provinceValue)?.children ?? [];
+      const areas = cities.find((node) => node.value === cityValue)?.children ?? [];
+      const pick = (nodes: ServiceRegionNode[], key: string, next: string) => {
+        const node = nodes.find((item) => item.value === next);
+        onChange({
+          province:
+            key === 'province' ? { label: node?.label ?? '', value: next } : part('province'),
+          city: key === 'city' ? { label: node?.label ?? '', value: next } : {},
+          area: key === 'area' ? { label: node?.label ?? '', value: next } : {},
+          details: textOf(selection.details),
+        });
+      };
+      const selectClass = 'h-9 rounded-md border border-line bg-surface px-2 text-sm text-ink';
+      return (
+        <div className="grid gap-1.5">
+          <select
+            className={selectClass}
+            onChange={(event) => pick(regions, 'province', event.target.value)}
+            value={provinceValue}
+          >
+            <option value="">请选择省份</option>
+            {regions.map((node) => (
+              <option key={node.value} value={node.value}>
+                {node.label}
+              </option>
+            ))}
+          </select>
+          {cities.length > 0 ? (
+            <select
+              className={selectClass}
+              onChange={(event) => pick(cities, 'city', event.target.value)}
+              value={cityValue}
+            >
+              <option value="">请选择城市</option>
+              {cities.map((node) => (
+                <option key={node.value} value={node.value}>
+                  {node.label}
+                </option>
+              ))}
+            </select>
+          ) : null}
+          {areas.length > 0 ? (
+            <select
+              className={selectClass}
+              onChange={(event) => pick(areas, 'area', event.target.value)}
+              value={areaValue}
+            >
+              <option value="">请选择区县</option>
+              {areas.map((node) => (
+                <option key={node.value} value={node.value}>
+                  {node.label}
+                </option>
+              ))}
+            </select>
+          ) : null}
+          <Input
+            onChange={(event) =>
+              onChange({
+                province: part('province'),
+                city: part('city'),
+                area: part('area'),
+                details: event.target.value,
+              })
+            }
+            placeholder="详细地址"
+            value={textOf(selection.details)}
+          />
+        </div>
+      );
+    }
     case 'multiInput':
       return (
         <textarea

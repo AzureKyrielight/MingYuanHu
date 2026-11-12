@@ -8,10 +8,14 @@ import { buildMultipart, contentTypeFor } from './multipart';
 import {
   buildServiceFormData,
   buildServiceSchema,
+  dateOrderViolations,
   defaultServiceValues,
+  findField,
   missingRequiredFields,
   parseFormDefinition,
+  toLocalInput,
   type ServiceAttachment,
+  type ServiceDataSourceRef,
   type ServiceSchema,
 } from './service-form';
 
@@ -183,6 +187,8 @@ export interface ServiceFormView {
   readonly schema: ServiceSchema;
   /** 可直接放进表单的预填值。 */
   readonly values: Record<string, unknown>;
+  /** 省市区字典（仅当表单含 region 字段时取数，供渲染层三级联动）。 */
+  readonly regions: readonly ServiceRegionNode[];
 }
 
 /** 读取事项的动态表单：先拿发起部门，再并行取 bpmn_id 与 start-data，最后合并插件定义。 */
@@ -197,7 +203,10 @@ export async function fetchServiceForm(appId: string): Promise<ServiceFormView> 
   if (!definition.formId) throw new Error('发起数据缺少表单 id（currform）');
   const formv = await fetchFormPlugins(definition.formId, bpmnId, starterDepartId);
   const schema = buildServiceSchema(appId, formv, definition);
-  return { appId, starterDepartId, schema, values: defaultServiceValues(schema) };
+  const regions = schema.fields.some((field) => field.type === 'region')
+    ? await fetchServiceRegionTree()
+    : [];
+  return { appId, starterDepartId, schema, values: defaultServiceValues(schema), regions };
 }
 
 /** 提交前的必填校验结果（交给渲染层标红）。 */
@@ -208,19 +217,174 @@ export function validateServiceValues(schema: ServiceSchema, values: Record<stri
   }));
 }
 
+export interface ServiceRegionNode {
+  readonly label: string;
+  readonly value: string;
+  readonly children: readonly ServiceRegionNode[];
+}
+
+/** 区域编码右侧补 0 至 6 位（"51"→"510000"）。 */
+function normalizeRegionCode(value: string): string {
+  if (!value || value.length >= 6 || !/^\d+$/.test(value)) return value;
+  return value + '0'.repeat(6 - value.length);
+}
+
+function parseRegionNodes(raw: unknown): ServiceRegionNode[] {
+  let items: unknown[] = [];
+  if (Array.isArray(raw)) items = raw;
+  else if (isRecord(raw)) items = Object.values(raw);
+  const out: ServiceRegionNode[] = [];
+  for (const item of items) {
+    if (!isRecord(item)) continue;
+    const label = firstRegionString(item);
+    if (!label) continue;
+    out.push({
+      label,
+      value: normalizeRegionCode(textOf(item.value) || textOf(item.code) || textOf(item.id)),
+      children: parseRegionNodes(item.children),
+    });
+  }
+  return out;
+}
+
+function firstRegionString(source: Record<string, unknown>): string {
+  return textOf(source.name) || textOf(source.label) || textOf(source.title);
+}
+
+/** 省市区三级字典（/api/dictionary/province，starter_depart_id 固定 395876）。 */
+export async function fetchServiceRegionTree(): Promise<readonly ServiceRegionNode[]> {
+  await ensureService();
+  const query = new URLSearchParams({
+    agent_uid: '',
+    starter_depart_id: DEFAULT_STARTER_DEPART_ID,
+  });
+  const response = await scuRequest(`${SERVICE_BASE}/api/dictionary/province?${query}`, {
+    headers: FORM_HEADERS,
+  });
+  const data = decode(response).d;
+  // 兼容 d 直接为列表 / d.list / d.children 三种形态。
+  if (isRecord(data)) {
+    const fromList = parseRegionNodes(data.list);
+    if (fromList.length > 0) return fromList;
+    const fromChildren = parseRegionNodes(data.children);
+    if (fromChildren.length > 0) return fromChildren;
+  }
+  const nodes = parseRegionNodes(data);
+  if (nodes.length === 0) throw new Error('省市区字典为空');
+  return nodes;
+}
+
+/** DataSource 取数（POST /site/data-source/detail），返回 d.list。 */
+async function fetchServiceDataSourceValue(
+  appId: string,
+  componentKey: string,
+  ref: ServiceDataSourceRef,
+  schema: ServiceSchema,
+  starterDepartId: string,
+): Promise<unknown> {
+  const form = new URLSearchParams({
+    id: ref.id,
+    inst_id: '0',
+    app_id: appId,
+    form_version_id: schema.formVersionId,
+    component: componentKey,
+    'params[formId]': schema.formId,
+    'params[pluginKey]': componentKey,
+    agent_uid: '',
+    starter_depart_id: starterDepartId,
+  });
+  for (const [key, value] of Object.entries(ref.configure)) form.set(`configure[${key}]`, value);
+  const response = await scuRequest(`${SERVICE_BASE}/site/data-source/detail`, {
+    method: 'POST',
+    headers: FORM_HEADERS,
+    body: form.toString(),
+    timeoutMs: 20_000,
+  });
+  const data = decode(response).d;
+  if (isRecord(data) && data.list !== undefined) return data.list;
+  return data;
+}
+
+/**
+ * DataSource 结果分发（与 SCU-CLI ApplyDataSourceValue 一致）：
+ * setplugin 按 MapConfig 分发多列（calendar 目标宽容解析日期），
+ * 否则 name 写入本字段与 ResultKey 配对字段。
+ */
+function applyServiceDataSource(
+  schema: ServiceSchema,
+  fieldKey: string,
+  ref: ServiceDataSourceRef,
+  values: Record<string, unknown>,
+  listValue: unknown,
+): void {
+  if (ref.isSetPlugin) {
+    if (!isRecord(listValue)) return;
+    for (const [targetKey, column] of Object.entries(ref.mapConfig)) {
+      const raw = listValue[column];
+      if (raw === null || raw === undefined || textOf(raw) === '') continue;
+      const target = findField(schema, targetKey);
+      if (target?.type === 'calendar') {
+        const rawText = textOf(raw);
+        const date = new Date(rawText);
+        // 日期形态原样保留（序列化按 UTC 处理），完整时间转本地输入格式。
+        if (/^\d{4}-\d{2}-\d{2}$/.test(rawText)) values[targetKey] = rawText;
+        else if (!Number.isNaN(date.getTime())) values[targetKey] = toLocalInput(date);
+      } else {
+        values[targetKey] = textOf(raw);
+      }
+    }
+    return;
+  }
+  const name = textOf(listValue);
+  if (!name || name === '<nil>') return;
+  values[fieldKey] = name;
+  if (ref.resultKey) values[ref.resultKey] = name;
+}
+
 /** 提交事项（POST /site/process/launch，data 为 JSON 字符串）。 */
 export async function submitServiceForm(
   appId: string,
   values: Record<string, unknown>,
-): Promise<{ submitted: true }> {
+): Promise<{ submitted: true; warnings: readonly string[] }> {
   const form = await fetchServiceForm(appId);
-  const missing = validateServiceValues(form.schema, values);
+  const working: Record<string, unknown> = { ...values };
+  const warnings: string[] = [];
+
+  // DataSource 联动取数（失败降级为仅提交名称，与 SCU-CLI 一致）。
+  for (const field of form.schema.fields) {
+    if (field.type !== 'dataSource' || !field.dataSource) continue;
+    const name = textOf(working[field.key]);
+    if (!name) continue;
+    try {
+      const listValue = await fetchServiceDataSourceValue(
+        appId,
+        field.key,
+        field.dataSource,
+        form.schema,
+        form.starterDepartId,
+      );
+      applyServiceDataSource(form.schema, field.key, field.dataSource, working, listValue);
+    } catch (error) {
+      warnings.push(
+        `数据源 ${field.label || field.key} 取数失败（仅提交名称）：${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  // 日期顺序校验（开始日期不能晚于结束日期等）。
+  for (const violation of dateOrderViolations(form.schema, working)) {
+    throw new Error(violation.message);
+  }
+
+  const missing = validateServiceValues(form.schema, working);
   if (missing.length > 0)
     throw new Error(`还有必填项未填写：${missing.map((item) => item.label).join('、')}`);
   const payload = JSON.stringify({
     app_id: appId,
     node_id: '',
-    form_data: buildServiceFormData(form.schema, values),
+    form_data: buildServiceFormData(form.schema, working),
     userview: 1,
   });
   const body = new URLSearchParams({
@@ -236,7 +400,7 @@ export async function submitServiceForm(
     timeoutMs: 30_000,
   });
   decode(response);
-  return { submitted: true };
+  return { submitted: true, warnings };
 }
 
 /** 上传单个附件（multipart 字段 upfile），返回表单可直接使用的 {name,url,id}。 */

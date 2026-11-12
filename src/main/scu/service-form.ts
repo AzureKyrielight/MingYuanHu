@@ -50,6 +50,29 @@ export interface ServiceField {
   readonly readOnly: boolean;
   /** auth 标记为 hidden/forbidden：不渲染，提交占位值。 */
   readonly suppressed: boolean;
+  /** DataSource 字段的取数配置（sourceid/resultKey/mapConfig/sourceConfig）。 */
+  readonly dataSource: ServiceDataSourceRef | null;
+  /** Validate 插件的日期顺序校验（{f_dateDayMinus}({p_A},{p_B})<0）。 */
+  readonly dateRule: ServiceDateOrderRule | null;
+}
+
+/** DataSource 取数配置（POST /site/data-source/detail 的入参来源）。 */
+export interface ServiceDataSourceRef {
+  readonly id: string;
+  /** 配对字段 key；"setplugin" 表示按 mapConfig 分发多列。 */
+  readonly resultKey: string;
+  /** setplugin 模式：目标字段 key → 结果列名。 */
+  readonly mapConfig: Readonly<Record<string, string>>;
+  /** sourceConfig 附加参数。 */
+  readonly configure: Readonly<Record<string, string>>;
+  readonly isSetPlugin: boolean;
+}
+
+/** Validate 日期顺序校验规则：A 必须早于等于 B。 */
+export interface ServiceDateOrderRule {
+  readonly firstKey: string;
+  readonly secondKey: string;
+  readonly message: string;
 }
 
 export interface ServiceShowHideRule {
@@ -275,6 +298,54 @@ export function parsePlugins(raw: unknown): Record<string, unknown>[] {
   return [];
 }
 
+/** Validate 日期顺序规则：{f_dateDayMinus}({p_A},{p_B})<0，语义 A 必须早于等于 B。 */
+const DATE_ORDER_RULE_RE =
+  /^\s*\{f_dateDayMinus\}\(\s*\{p_([A-Za-z0-9_]+)\}\s*,\s*\{p_([A-Za-z0-9_]+)\}\s*\)\s*<\s*0\s*$/;
+
+function parseDateOrderRule(data: Record<string, unknown>): ServiceDateOrderRule | null {
+  const rule = text(data.rule);
+  const match = DATE_ORDER_RULE_RE.exec(rule);
+  if (!match) return null;
+  return { firstKey: match[1]!, secondKey: match[2]!, message: text(data.alert) };
+}
+
+/** mapConfig 真实形态 {User_156: {key: "grade"}}。 */
+function parseMapConfig(raw: unknown): Record<string, string> {
+  if (!isRecord(raw)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw))
+    if (isRecord(value) && value.key !== undefined) out[key] = text(value.key);
+  return out;
+}
+
+/** sourceConfig 结构 {key: {value: ...}} 或 {key: 值}。 */
+function parseSourceConfig(raw: unknown): Record<string, string> {
+  if (!isRecord(raw)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (isRecord(value) && value.value !== undefined) out[key] = text(value.value);
+    else if (value !== null && value !== undefined) out[key] = text(value);
+  }
+  return out;
+}
+
+function parseDataSourceRef(
+  type: ServiceFieldType,
+  data: Record<string, unknown>,
+): ServiceDataSourceRef | null {
+  if (type !== 'dataSource') return null;
+  const id = firstString(data, ['sourceid', 'source_id', 'data_source_id', 'dataSourceId']);
+  if (!id) return null;
+  const resultKey = firstString(data, ['resultKey']);
+  return {
+    id,
+    resultKey,
+    mapConfig: parseMapConfig(data.mapConfig),
+    configure: parseSourceConfig(data.sourceConfig),
+    isSetPlugin: resultKey === 'setplugin',
+  };
+}
+
 function parseField(
   plugin: Record<string, unknown>,
   fallbackKey: string,
@@ -303,6 +374,8 @@ function parseField(
       required: false,
       readOnly: false,
       suppressed: false,
+      dataSource: parseDataSourceRef(type, data),
+      dateRule: type === 'validate' ? parseDateOrderRule(data) : null,
     },
     showHide: type === 'showHide' ? parseShowHide(data) : null,
   };
@@ -345,13 +418,16 @@ export function buildServiceSchema(
     const parsed = parseField(entry, `plugin_${index}`, formId, formVersionId);
     if (!parsed.field.key) continue;
     const auth = definition.auth[parsed.field.key] ?? '';
+    const readOnly = READ_ONLY_AUTH.has(auth);
+    const suppressed = auth === 'hidden' || auth === 'forbidden';
     fields.push({
       ...parsed.field,
       required: auth === 'require',
-      readOnly: READ_ONLY_AUTH.has(auth),
-      suppressed: auth === 'hidden' || auth === 'forbidden',
+      readOnly,
+      suppressed,
     });
-    if (parsed.showHide) showHide.push(parsed.showHide);
+    // 与 SCU-CLI 一致：只读/隐藏的 ShowHide 插件在发起节点不生效。
+    if (parsed.showHide && !readOnly && !suppressed) showHide.push(parsed.showHide);
   }
   fields.sort((a, b) => a.sort - b.sort);
   return {
@@ -402,7 +478,11 @@ function tokenize(expression: string, valueOf: (key: string) => string): Token[]
     if (char === '{') {
       const end = expression.indexOf('}', index);
       if (end < 0) break;
-      tokens.push({ kind: 'value', text: valueOf(expression.slice(index + 1, end).trim()) });
+      // 真实表达式写 {p_X}：Go 正则把 "{p_" 当字面量、捕获无前缀 key；
+      // 兼容旧的 {X} 形态，仅剥离存在的 p_ 前缀。
+      let key = expression.slice(index + 1, end).trim();
+      if (key.startsWith('p_')) key = key.slice(2);
+      tokens.push({ kind: 'value', text: valueOf(key) });
       index = end + 1;
       continue;
     }
@@ -445,9 +525,104 @@ function tokenize(expression: string, valueOf: (key: string) => string): Token[]
   return tokens;
 }
 
-/** 求值 ShowHide 条件表达式；无法解析时按「不命中」处理（字段保持可见）。 */
+// ─── ShowHide 表达式特判（与 SCU-CLI evalShowHideExpression 对齐） ──
+
+const SPECIAL_DATE_CMP_RE =
+  /^new Date\(\{p_([A-Za-z0-9_]+)\}\)\s*(<=|>=|<|>)\s*new Date\('([^']+)'\)$/;
+const SPECIAL_EMPTY_CMP_RE = /^\{p_([A-Za-z0-9_]+)\}\s*(==|!=)\s*''$/;
+const SPECIAL_INDEX_OF_RE = /^\{p_([A-Za-z0-9_]+)\}\.indexOf\(([^)]+)\)\s*(!==-1|==-1)$/;
+const SPECIAL_INCLUDES_RE = /^\{p_([A-Za-z0-9_]+)\}\.includes\(([^)]+)\)$/;
+const SPECIAL_ARRAY_CMP_RE = /^\{p_([A-Za-z0-9_]+)\}\[0\](?:\.value)?\s*(==|!=)\s*(\S+)$/;
+
+function unquoteExpr(value: string): string {
+  const trimmed = value.trim();
+  if (
+    trimmed.length >= 2 &&
+    ((trimmed.startsWith("'") && trimmed.endsWith("'")) ||
+      (trimmed.startsWith('"') && trimmed.endsWith('"')))
+  )
+    return trimmed.slice(1, -1);
+  return trimmed;
+}
+
+/** 宽松解析服务端日期（'2026-08-10'、'2026-08-10T17:10:21' 等），失败返回 null。 */
+function parseLooseDate(value: string): number | null {
+  const match = /^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2}(?::\d{2})?))?/.exec(value.trim());
+  if (!match) return null;
+  const iso = match[2] ? `${match[1]}T${match[2]}` : (match[1] ?? '');
+  const time = new Date(iso).getTime();
+  return Number.isNaN(time) ? null : time;
+}
+
+/**
+ * 求值 ShowHide 条件表达式；无法解析时按「不命中」处理（字段保持可见）。
+ * 先试 SCU-CLI 的方法调用/日期比较形态，再落到通用 tokenizer（括号/&&/||/in）。
+ */
 export function evaluateCondition(expression: string, valueOf: (key: string) => string): boolean {
-  const tokens = tokenize(expression, valueOf);
+  const result = evaluateConditionStrict(expression, valueOf);
+  if (result !== null) return result;
+  const expr = expression.trim();
+  // 无括号的 || 复合：逐段求值，任一段未知即整体不命中（与 Go 一致）。
+  if (expr.includes('||') && !expr.includes('(') && !expr.includes(')')) {
+    for (const part of expr.split('||')) {
+      const hit = evaluateConditionStrict(part, valueOf);
+      if (hit === true) return true;
+      if (hit === null) return false;
+    }
+    return false;
+  }
+  return false;
+}
+
+/** 返回 true/false 表示可求值，null 表示形态未支持。 */
+function evaluateConditionStrict(
+  expression: string,
+  valueOf: (key: string) => string,
+): boolean | null {
+  const expr = expression.trim();
+  if (expr === 'true') return true;
+  if (expr === 'false') return false;
+
+  const normValue = (key: string): string => {
+    const value = valueOf(key);
+    return value === null || value === undefined ? '' : String(value).trim();
+  };
+
+  let match: RegExpExecArray | null;
+  if ((match = SPECIAL_DATE_CMP_RE.exec(expr))) {
+    const left = parseLooseDate(normValue(match[1]!));
+    const right = parseLooseDate(match[3]!);
+    if (left === null || right === null) return null;
+    switch (match[2]) {
+      case '<=':
+        return left <= right;
+      case '>=':
+        return left >= right;
+      case '<':
+        return left < right;
+      case '>':
+        return left > right;
+    }
+  }
+  if ((match = SPECIAL_EMPTY_CMP_RE.exec(expr))) {
+    const empty = normValue(match[1]!) === '';
+    return (match[2] === '==') === empty;
+  }
+  if ((match = SPECIAL_INDEX_OF_RE.exec(expr))) {
+    const value = normValue(match[1]!);
+    const needle = unquoteExpr(match[2]!);
+    const hit = needle !== '' && value.includes(needle);
+    return match[3] === '!==-1' ? hit : !hit;
+  }
+  if ((match = SPECIAL_INCLUDES_RE.exec(expr))) {
+    return normValue(match[1]!).includes(unquoteExpr(match[2]!));
+  }
+  if ((match = SPECIAL_ARRAY_CMP_RE.exec(expr))) {
+    const hit = normValue(match[1]!) === unquoteExpr(match[3]!);
+    return (match[2] === '==') === hit;
+  }
+
+  const tokens = tokenize(expr, valueOf);
   let position = 0;
 
   const peek = (): Token | undefined => tokens[position];
@@ -541,10 +716,10 @@ export function evaluateCondition(expression: string, valueOf: (key: string) => 
 
   try {
     const value = parseOr();
-    // 没吃完 token 说明表达式里有不认识的写法：按「不命中」处理，避免误隐藏字段。
-    return position >= tokens.length ? value : false;
+    // 没吃完 token 说明表达式里有不认识的写法：返回 null（按不命中处理）。
+    return position >= tokens.length ? value : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -566,8 +741,10 @@ export function resolveVisibility(
   const required: Record<string, boolean> = {};
   const clear = new Set<string>();
   for (const rule of schema.showHide) {
-    for (const condition of rule.conditions) {
-      const control = rule.controls[condition.name];
+    for (const [index, condition] of rule.conditions.entries()) {
+      // 真实协议里 controls 的 conkey 是条件序号字符串（"0"/"1"…），
+      // 与 conditions 按下标配对；兼容旧测试里按条件名索引的形态。
+      const control = rule.controls[String(index)] ?? rule.controls[condition.name];
       if (!control) continue;
       const hit = condition.expression
         ? evaluateCondition(condition.expression, (key) => {
@@ -678,7 +855,9 @@ export function defaultServiceValues(schema: ServiceSchema): Record<string, unkn
         : [];
     } else if (field.type === 'calendar') {
       const iso = text(preset);
-      values[field.key] = iso ? iso.slice(0, 16) : '';
+      const date = new Date(iso);
+      // 服务端预填是 UTC 时间，转本地后再交给 datetime-local，保证序列化往返一致。
+      values[field.key] = Number.isNaN(date.getTime()) ? '' : toLocalInput(date);
     } else if (field.type === 'dataSource') {
       values[field.key] = isRecord(preset) ? text(preset.list) : text(preset);
     } else if (field.type === 'region') {
@@ -688,6 +867,35 @@ export function defaultServiceValues(schema: ServiceSchema): Record<string, unkn
     }
   }
   return values;
+}
+
+const padTwo = (value: number): string => String(value).padStart(2, '0');
+
+/** Date → datetime-local 输入格式（YYYY-MM-DDTHH:mm，本地时区）。 */
+export function toLocalInput(date: Date): string {
+  return `${date.getFullYear()}-${padTwo(date.getMonth() + 1)}-${padTwo(date.getDate())}T${padTwo(date.getHours())}:${padTwo(date.getMinutes())}`;
+}
+
+/** Validate 日期顺序校验：返回违反「早于等于」的规则（提交前抛出）。 */
+export function dateOrderViolations(
+  schema: ServiceSchema,
+  values: Readonly<Record<string, unknown>>,
+): readonly { firstKey: string; secondKey: string; message: string }[] {
+  const violations: { firstKey: string; secondKey: string; message: string }[] = [];
+  for (const field of schema.fields) {
+    const rule = field.dateRule;
+    if (!rule) continue;
+    const first = parseLooseDate(text(values[rule.firstKey]));
+    const second = parseLooseDate(text(values[rule.secondKey]));
+    if (first !== null && second !== null && first > second) {
+      violations.push({
+        firstKey: rule.firstKey,
+        secondKey: rule.secondKey,
+        message: rule.message || `${rule.firstKey} 必须早于等于 ${rule.secondKey}`,
+      });
+    }
+  }
+  return violations;
 }
 
 /** 必填校验：返回缺失字段（含 label，便于直接展示）。 */
@@ -732,10 +940,16 @@ export function buildServiceFormData(
     if (type === 'dataSource') {
       const name = text(value);
       if (!name) {
+        // 取数为空：本字段与配对字段整对省略（与 SCU-CLI 一致）。
         omitted.add(key);
+        if (field?.dataSource && !field.dataSource.isSetPlugin && field.dataSource.resultKey)
+          omitted.add(field.dataSource.resultKey);
         continue;
       }
       result[key] = { list: name };
+      // 配对字段延迟到循环结束后写入，避免被目标字段自身分支覆盖。
+      if (field?.dataSource && !field.dataSource.isSetPlugin && field.dataSource.resultKey)
+        pairWrites[field.dataSource.resultKey] = name;
       continue;
     }
     if (!field) {
