@@ -575,6 +575,9 @@ function BalancePanel() {
           />
         </label>
       </div>
+      <p className="text-xs text-ink-3">
+        缴费平台按学号校验户号，只能查询本人账号绑定的房间；绑定后留空房间号即可复用。
+      </p>
       {result && (result.ok ? <BalanceCard value={result.data} /> : <ErrorText result={result} />)}
     </Panel>
   );
