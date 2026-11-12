@@ -5,8 +5,34 @@ import {
   eventStyle,
   layoutDayColumns,
   minutesToRem,
+  semesterOptions,
   timelineStart,
 } from './timetable-format';
+
+describe('semesterOptions', () => {
+  it('以锚点学期为最新项，往前排六个学期', () => {
+    expect(semesterOptions('2026-2027-1-1')).toEqual([
+      '2026-2027-1-1',
+      '2025-2026-2-1',
+      '2025-2026-1-1',
+      '2024-2025-2-1',
+      '2024-2025-1-1',
+      '2023-2024-2-1',
+    ]);
+  });
+
+  it('翻到往年时本学期仍在候选里，可以再切回来', () => {
+    const options = semesterOptions('2026-2027-1-1', '2023-2024-1-1');
+    expect(options[0]).toBe('2026-2027-1-1');
+    expect(options).toContain('2023-2024-1-1');
+    // 窗口外的旧学期补在末尾，不打断「从新到旧」的顺序。
+    expect(options.at(-1)).toBe('2023-2024-1-1');
+  });
+
+  it('格式异常时至少保留原值', () => {
+    expect(semesterOptions('custom')).toEqual(['custom']);
+  });
+});
 
 // 时间用一天内的分钟数表示，样例不对应任何真实课程。
 describe('layoutDayColumns', () => {

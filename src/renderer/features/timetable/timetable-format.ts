@@ -134,12 +134,15 @@ export function semesterLabel(semester: string): string {
   return `${start}-${end} ${names[term ?? ''] ?? `第 ${term} 学期`}`;
 }
 
-export function semesterOptions(current: string): string[] {
-  const [startText, , termText, seqText] = current.split('-');
+/** 学期下拉候选：以「当前学期」为锚点往前排 6 个，最新在前。
+ *  正在查看的学期若落在窗口外（如翻到很早的往年）也一并保留，
+ *  否则下拉里再没有回到本学期的入口。 */
+export function semesterOptions(anchor: string, selected: string = anchor): string[] {
+  const [startText, , termText, seqText] = anchor.split('-');
   const start = Number(startText);
   const term = Number(termText);
-  if (!Number.isInteger(start) || !Number.isInteger(term) || !seqText) return [current];
-  const options = [current];
+  if (!Number.isInteger(start) || !Number.isInteger(term) || !seqText) return [anchor];
+  const options = [anchor];
   let year = start;
   let semester = term;
   while (options.length < 6) {
@@ -150,7 +153,9 @@ export function semesterOptions(current: string): string[] {
     }
     options.push(`${year}-${year + 1}-${semester}-${seqText}`);
   }
-  return options;
+  if (!options.includes(selected)) options.push(selected);
+  // 统一按「学年 + 学期」从新到旧排序：窗口外补进来的旧学期排到末尾。
+  return options.sort((a, b) => b.localeCompare(a, 'en', { numeric: true }));
 }
 
 export function formatSyncTime(value: string | null): string {

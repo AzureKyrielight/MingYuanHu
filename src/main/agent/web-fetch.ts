@@ -4,6 +4,7 @@ import { extractionPlugin, filterPlugin } from '@mdream/js/plugins';
 import { open } from 'node:fs/promises';
 import { prepareDocumentFile } from '../resources';
 import { fetchDeepSeek } from './deepseek';
+import { stripInvisible, stripTags } from './html-text';
 
 // 抓取的站点没有官方契约；使用桌面 Chrome UA，降低被判定为机器人的概率。
 const BROWSER_UA =
@@ -123,8 +124,19 @@ export async function fetchWebPage(
   const { title, text } = isMarkup
     ? htmlToPage(source, url.toString())
     : { title: null, text: source };
-  const normalized = text.replace(/\r\n/g, '\n');
-  return finish(url, title, contentType || 'text/html', normalized, bytesTruncated);
+  let normalized = text.replace(/\r\n/g, '\n');
+  const notes: string[] = [];
+  // 纯客户端渲染的站点（React/Vue 单页应用）HTML 里几乎没有正文，mdream 只能抽到
+  // 「Skip to main content」这类骨架；此时补一次粗粒度兜底（正文 + 站内链接），并明确告知
+  // 模型原因，避免它把空内容当成「页面没有信息」而结束任务。
+  if (isMarkup && source.length > 2048 && normalized.trim().length < 200) {
+    const fallback = rawPageText(source);
+    if (fallback.length > normalized.trim().length) normalized = fallback;
+    notes.push(
+      '该页正文疑似由 JavaScript 动态渲染，HTML 里可提取的文字很少（上面的 text 是兜底抽取，可能只含标题、导航与链接）。需要完整内容时，可改用该站的 sitemap / RSS / 搜索结果的静态页，或检索同一主题的其他来源',
+    );
+  }
+  return finish(url, title, contentType || 'text/html', normalized, bytesTruncated, notes);
 }
 
 async function peekResponse(response: Response) {
@@ -229,4 +241,22 @@ function htmlToPage(html: string, origin: string): { title: string | null; text:
     ],
   });
   return { title, text };
+}
+
+/** 正文抽取结果过少时的兜底：整页文本化，并附上前若干个绝对链接，
+ *  让模型至少能顺着导航继续找内容，而不是拿到一页空白。 */
+function rawPageText(html: string): string {
+  const visible = stripInvisible(html);
+  const body = stripTags(visible).slice(0, TEXT_LIMIT);
+  const seen = new Set<string>();
+  const links: string[] = [];
+  for (const match of visible.matchAll(/<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi)) {
+    const href = (match[1] ?? '').trim();
+    const label = stripTags(match[2] ?? '');
+    if (!/^https?:\/\//i.test(href) || !label || seen.has(href)) continue;
+    seen.add(href);
+    links.push(`- [${label}](${href})`);
+    if (links.length >= 40) break;
+  }
+  return links.length > 0 ? `${body}\n\n页面上的链接：\n${links.join('\n')}` : body;
 }

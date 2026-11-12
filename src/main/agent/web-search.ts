@@ -9,6 +9,7 @@ import type {
 } from '../../shared/capabilities';
 import { readDisabledTools, setBuiltinCapabilities } from './tools';
 import { searchDeepSeek } from './deepseek';
+import { stripTags } from './html-text';
 
 // 搜索服务配置（设置 › 内置能力 › 网络）：可存多条（同类型可重复，供多账号复用额度），
 // 聊天输入框左下角选择当前使用哪一条；应用不内置搜索服务。
@@ -230,7 +231,7 @@ export function readWebSearchKey(providerId: string): string | null {
   return provider?.apiKey && isDeepSeekEndpoint(provider.baseUrl) ? provider.apiKey : null;
 }
 
-interface WebSearchResult {
+export interface WebSearchResult {
   title: string;
   url: string;
   snippet: string;
@@ -345,13 +346,80 @@ async function searchCustomEndpoint(
   return results;
 }
 
-/** 联网搜索工具：用聊天侧当前选中的配置执行；未选中或无配置时报错引导。 */
+// 免密钥回退用的桌面 Chrome UA：必应会对明显的脚本 UA 返回精简版结果页。
+const FALLBACK_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+// 必应的时间过滤代码：日 / 周 / 月 / 年。
+const BING_FRESHNESS: Record<string, string> = {
+  pd: 'ez1',
+  day: 'ez1',
+  pw: 'ez2',
+  week: 'ez2',
+  pm: 'ez3',
+  month: 'ez3',
+  py: 'ez5',
+  year: 'ez5',
+};
+
+/** 解析必应结果页：结果条目是 `<li class="b_algo">`，标题在其中的 `<h2><a href>`，
+ *  摘要取 `b_caption` 里的第一个 `<p>`。 */
+export function parseBingResults(html: string): WebSearchResult[] {
+  const results: WebSearchResult[] = [];
+  for (const block of html.split('<li class="b_algo"').slice(1)) {
+    const link = /<h2[^>]*>\s*<a[^>]*\shref="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i.exec(block);
+    if (!link) continue;
+    const url = stripTags(link[1] ?? '');
+    if (!/^https?:\/\//i.test(url)) continue;
+    const snippet =
+      /<p[^>]*class="[^"]*b_lineclamp[^"]*"[^>]*>([\s\S]*?)<\/p>/i.exec(block) ??
+      /<div[^>]*class="[^"]*b_caption[^"]*"[^>]*>[\s\S]*?<p[^>]*>([\s\S]*?)<\/p>/i.exec(block);
+    results.push({
+      url,
+      title: stripTags(link[2] ?? '') || url,
+      snippet: snippet ? stripTags(snippet[1] ?? '') : '',
+    });
+  }
+  return results;
+}
+
+/** 免密钥搜索：抓必应网页版并解析。没配搜索服务时自动使用，作为「能搜到东西」的保底，
+ *  配置了 Brave / Google / DeepSeek / 自定义端点时不会被使用。 */
+async function searchBingFallback(
+  query: string,
+  count: number,
+  freshness: string | undefined,
+): Promise<WebSearchResult[]> {
+  const params = new URLSearchParams({
+    q: query,
+    count: String(Math.min(20, Math.max(count * 2, 10))),
+  });
+  const filter = freshness ? BING_FRESHNESS[freshness.toLowerCase()] : undefined;
+  if (filter) params.set('filters', `ex1:"${filter}"`);
+  const response = await fetch(`https://cn.bing.com/search?${params}`, {
+    headers: {
+      'user-agent': FALLBACK_UA,
+      accept: 'text/html,application/xhtml+xml',
+      'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) throw searchError(response.status);
+  const results = parseBingResults(await response.text());
+  if (results.length === 0)
+    throw new Error(
+      '联网搜索暂不可用（必应结果页解析为空，可能被限流）；可稍后重试，或在 设置 › 内置能力 的「网络」分组中配置搜索服务',
+    );
+  return results;
+}
+
+/** 联网搜索工具：优先用聊天侧选中的配置；一条都没配时回退到必应网页版（免密钥），
+ *  保证新用户第一轮就能联网，而不是被报错拦下。 */
 export async function webSearch(query: string, count = 5, freshness?: string) {
   const config = readWebSearchConfig();
-  if (!config)
-    throw new Error(
-      '尚未选择搜索服务：请在聊天输入框左下角选择，或在 设置 › 内置能力 的「网络」分组中配置',
-    );
+  if (!config) {
+    const results = await searchBingFallback(query, count, freshness);
+    return { query, provider: 'bing', fallback: true, results: results.slice(0, count) };
+  }
   const results =
     config.provider === 'brave'
       ? await searchBrave(query, count, freshness, config.apiKey)

@@ -29,6 +29,7 @@ import { SettingsGroup } from '../SettingsGroup';
 import { errorText } from '../../../workspace/store';
 import { showToast } from '../../../app/toasts';
 import { dialogOverlay, dialogPanel } from '../../../components/ui/motion';
+import { ProviderLogo, providerLogoId } from '../components/provider-logos';
 
 type Detail = { mode: 'create' } | { mode: 'edit'; id: string };
 
@@ -43,6 +44,30 @@ function ProviderMonogram({ name, size }: { name: string; size: 'sm' | 'md' }) {
       )}
     >
       {(name.trim()[0] ?? '新').toUpperCase()}
+    </span>
+  );
+}
+
+/** 品牌位：认得出厂商就显示官方标记，认不出才退回首字母块。 */
+function ProviderAvatar({
+  name,
+  presetId,
+  size,
+}: {
+  name: string;
+  presetId?: string | null;
+  size: 'sm' | 'md';
+}) {
+  const logo = providerLogoId(presetId, name);
+  if (!logo) return <ProviderMonogram name={name} size={size} />;
+  return (
+    <span
+      className={cn(
+        'grid shrink-0 place-items-center rounded-card bg-hover-2 text-ink-2',
+        size === 'sm' ? 'size-6' : 'size-8',
+      )}
+    >
+      <ProviderLogo className={size === 'sm' ? 'size-4' : 'size-5'} id={logo} />
     </span>
   );
 }
@@ -363,7 +388,11 @@ export function LlmSection() {
                           onClick={() => setDetail({ mode: 'edit', id: provider.id })}
                           type="button"
                         >
-                          <ProviderMonogram name={provider.name} size="sm" />
+                          <ProviderAvatar
+                            name={provider.name}
+                            presetId={provider.presetId}
+                            size="sm"
+                          />
                           <span className="truncate">{provider.name}</span>
                           {/* 状态点：绿=启用（进入会话的模型候选），灰=停用。 */}
                           <span
@@ -673,7 +702,11 @@ function ProviderDetail({
     <div className="grid content-start gap-4">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
-          <ProviderMonogram name={provider?.name ?? name} size="md" />
+          <ProviderAvatar
+            name={provider?.name ?? name}
+            presetId={provider?.presetId ?? presetId}
+            size="md"
+          />
           <strong className="truncate text-base font-semibold">
             {provider?.name ?? '新建提供商'}
           </strong>
@@ -742,7 +775,10 @@ function ProviderDetail({
               <SelectContent>
                 {llmProviderPresets.map((item) => (
                   <SelectItem key={item.id} value={item.id}>
-                    {item.name}
+                    <span className="flex items-center gap-2">
+                      <ProviderLogo className="size-4" id={providerLogoId(item.id, item.name)} />
+                      {item.name}
+                    </span>
                   </SelectItem>
                 ))}
               </SelectContent>

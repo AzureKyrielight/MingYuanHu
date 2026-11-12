@@ -32,7 +32,7 @@ export function runMigrations(context: MigrationContext, target: number): number
   try {
     const version = db.pragma('user_version', { simple: true }) as number;
     if (version === 0 || version === target) return 0;
-    if (version > target) throw new Error('数据库由更新版本的 Dela 创建，请升级到最新版本');
+    if (version > target) throw new Error('数据库由更新版本的明远湖光创建，请升级到最新版本');
     const steps: Migration[] = [];
     for (let from = version; from < target; from++) {
       const step = migrations.find((migration) => migration.from === from);

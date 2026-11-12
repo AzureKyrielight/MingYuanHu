@@ -23,7 +23,7 @@ export function UpdatePrompt() {
 
   return (
     <Dialog.Root
-      // Esc 与点遮罩只是关掉弹窗，不代为决定：那一行仍然留着「安装更新」。
+      // Esc 与点遮罩只是关掉弹窗，不代为决定：那一行仍然留着「重新启动并安装」。
       onOpenChange={(open) => !busy && !open && dismiss()}
       open
     >

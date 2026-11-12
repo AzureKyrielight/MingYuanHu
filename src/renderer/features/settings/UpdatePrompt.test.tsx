@@ -177,7 +177,7 @@ it('关闭提示后从设置安装会再次确认，不直接退出', async () =
     ),
   );
   expect(document.body.textContent).not.toContain('退出并安装');
-  await act(async () => button('安装更新').click());
+  await act(async () => button('重新启动并安装').click());
   expect(document.body.textContent).toContain('退出并安装');
   expect(install).not.toHaveBeenCalled();
   expect(saveDraft).not.toHaveBeenCalled();

@@ -6,7 +6,7 @@ import { savedPendingInstall, setPendingInstall } from '../settings/prefs';
 import { failureEvent, initialUpdateState, reduceUpdate, type UpdateEvent } from './state';
 import type { UpdateReason, UpdateSnapshot, UpdateStep } from '../../shared/update';
 
-const DOWNLOAD_PAGE_URL = 'https://openlist.frameneo.com/@s/Dela_latest_release';
+const DOWNLOAD_PAGE_URL = 'https://github.com/AzureKyrielight/MingYuanHu/releases/latest';
 export const BACKGROUND_CHECK_INTERVAL = 2 * 60 * 60 * 1000;
 export const BACKGROUND_CHECK_DELAY = 30_000;
 export const PENDING_INSTALL_DELAY = 5_000;

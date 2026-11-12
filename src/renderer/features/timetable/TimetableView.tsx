@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CalendarRange, ChevronLeft, ChevronRight, Plus, RefreshCw } from 'lucide-react';
 import type { CalendarEvent, TimetableLesson, TimetableState, TodoItem } from '../../../shared/api';
+import { currentSemesterCode } from '../../../shared/schedule';
 import { Button } from '../../components/ui/button';
 import { DesktopOnlyNotice } from '../../components/ui/desktop-only-notice';
 import {
@@ -386,7 +387,7 @@ function DesktopTimetableView({ onOpenTodo }: { onOpenTodo?: (todoId: string) =>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {semesterOptions(semester).map((option) => (
+              {semesterOptions(currentSemesterCode(), semester ?? undefined).map((option) => (
                 <SelectItem key={option} value={option}>
                   {semesterLabel(option)}
                 </SelectItem>

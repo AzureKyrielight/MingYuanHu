@@ -89,7 +89,7 @@ afterEach(async () => {
 it('安装入口重新打开确认弹窗，确认前不保存或退出', async () => {
   useUpdateState.setState({ dismissedVersion: readyState.version });
   await act(async () => root.render(<UpdateControl />));
-  await act(async () => button('安装更新').click());
+  await act(async () => button('重新启动并安装').click());
   expect(useUpdateState.getState().dismissedVersion).toBeNull();
   expect(saveDraft).not.toHaveBeenCalled();
   expect(install).not.toHaveBeenCalled();

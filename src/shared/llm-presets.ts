@@ -43,8 +43,60 @@ export const llmProviderPresets: readonly LlmProviderPreset[] = [
     id: 'deepseek',
     name: 'DeepSeek',
     baseUrl: 'https://api.deepseek.com',
-    models: ['deepseek-v4-pro', 'deepseek-flash'],
+    // 官方同时提供对话、推理与快速档；实际可用列表以「检测模型」返回为准。
+    models: ['deepseek-v4-pro', 'deepseek-reasoner', 'deepseek-chat', 'deepseek-flash'],
     keyUrl: 'https://platform.deepseek.com/api_keys',
+  },
+  {
+    id: 'openai',
+    name: 'OpenAI',
+    baseUrl: 'https://api.openai.com/v1',
+    models: ['gpt-5.2', 'gpt-5.2-mini', 'gpt-4.1', 'o4-mini'],
+    keyUrl: 'https://platform.openai.com/api-keys',
+  },
+  {
+    id: 'anthropic',
+    name: 'Anthropic Claude',
+    // Anthropic 官方提供 OpenAI 兼容入口，可直接走本应用的对话协议。
+    baseUrl: 'https://api.anthropic.com/v1',
+    models: ['claude-opus-4-1', 'claude-sonnet-4-5', 'claude-haiku-4-5'],
+    keyUrl: 'https://console.anthropic.com/settings/keys',
+  },
+  {
+    id: 'google',
+    name: 'Google Gemini',
+    // Gemini 的 OpenAI 兼容前缀。
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    models: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash'],
+    keyUrl: 'https://aistudio.google.com/apikey',
+  },
+  {
+    id: 'xai',
+    name: 'xAI Grok',
+    baseUrl: 'https://api.x.ai/v1',
+    models: ['grok-4', 'grok-3', 'grok-3-mini'],
+    keyUrl: 'https://console.x.ai/team/default/api-keys',
+  },
+  {
+    id: 'zhipu',
+    name: '智谱 GLM',
+    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    models: ['glm-5.2', 'glm-4.7', 'glm-4.6'],
+    keyUrl: 'https://bigmodel.cn/usercenter/apikeys',
+  },
+  {
+    id: 'qwen',
+    name: '阿里通义千问',
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    models: ['qwen3-max', 'qwen3-coder-plus', 'qwen-plus'],
+    keyUrl: 'https://bailian.console.aliyun.com/?tab=model#/api-key',
+  },
+  {
+    id: 'kimi',
+    name: 'Moonshot Kimi',
+    baseUrl: 'https://api.moonshot.cn/v1',
+    models: ['kimi-k2-thinking', 'kimi-k2-turbo-preview', 'moonshot-v1-128k'],
+    keyUrl: 'https://platform.moonshot.cn/console/api-keys',
   },
   {
     id: 'minimax',

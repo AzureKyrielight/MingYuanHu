@@ -226,9 +226,9 @@ it('清除待装标记失败时不启动安装器', async () => {
   expect(mocks.quitAndInstall).not.toHaveBeenCalled();
 });
 
-it('手动下载兜底指向 CDN 分享页', async () => {
+it('手动下载兜底指向本仓库的 GitHub Releases', async () => {
   await invoke('open-download-page');
   expect(mocks.openExternal).toHaveBeenCalledWith(
-    'https://openlist.frameneo.com/@s/Dela_latest_release',
+    'https://github.com/AzureKyrielight/MingYuanHu/releases/latest',
   );
 });

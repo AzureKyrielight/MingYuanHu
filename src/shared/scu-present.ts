@@ -148,23 +148,31 @@ export function scuGradeSummary(rows: readonly ScuGradeRow[]): ScuGradeSummary {
   };
 }
 
+// 体测分项字段名来自 pead.scu.edu.cn 的 getStudentScore：
+// bmi / vc（肺活量）/ jump（立定跳远）/ sit_and_reach / pull_and_sit / 50m / run。
 const FITNESS_LABELS: Record<string, string> = {
   bmi: '体重指数',
   height: '身高',
   weight: '体重',
   vc: '肺活量',
   vital_capacity: '肺活量',
-  fifty: '50 米跑',
-  fifty_run: '50 米跑',
-  run_50: '50 米跑',
   jump: '立定跳远',
   standing_jump: '立定跳远',
+  standing_long_jump: '立定跳远',
+  sit_and_reach: '坐位体前屈',
   sit_reach: '坐位体前屈',
   sitting_forward: '坐位体前屈',
+  pull_and_sit: '引体向上 / 仰卧起坐',
   pull_up: '引体向上',
   pullup: '引体向上',
   sit_up: '仰卧起坐',
   situp: '仰卧起坐',
+  '50m': '50 米跑',
+  fifty: '50 米跑',
+  fifty_meter: '50 米跑',
+  fifty_run: '50 米跑',
+  run_50: '50 米跑',
+  run: '耐力跑',
   endurance: '耐力跑',
   long_run: '耐力跑',
   run_800: '800 米跑',
@@ -175,11 +183,59 @@ const FITNESS_INFO_LABELS: Record<string, string> = {
   student_num: '学号',
   student_name: '姓名',
   student_sex: '性别',
+  sex: '性别',
   student_college: '学院',
   student_class: '班级',
+  student_year: '年级',
+  studentYear: '学年',
   academic_year: '学年',
   school_year: '学年',
 };
+
+/** 分项字段名兜底：先查别名表，再按 `_` 拆词逐个翻译，仍认不出就归到「其他项目」，
+ *  避免画布上直接露出接口的英文键名。 */
+const FITNESS_TOKENS: Record<string, string> = {
+  bmi: '体重指数',
+  high: '身高',
+  height: '身高',
+  weight: '体重',
+  vc: '肺活量',
+  vital: '肺活量',
+  capacity: '肺活量',
+  jump: '跳远',
+  standing: '立定',
+  long: '长',
+  sit: '坐',
+  reach: '体前屈',
+  forward: '体前屈',
+  pull: '引体',
+  up: '向上',
+  endurance: '耐力',
+  run: '跑',
+  fifty: '50 米',
+  sprint: '短跑',
+  shuttle: '折返跑',
+  rope: '跳绳',
+  rope_skipping: '跳绳',
+};
+
+export function fitnessItemLabel(base: string): string {
+  const key = base
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  const known = FITNESS_LABELS[key];
+  if (known) return known;
+  const words = key
+    .replace(/(\d+)m\b/g, '$1 米')
+    .split('_')
+    .map((word) => FITNESS_TOKENS[word])
+    .filter((word): word is string => Boolean(word));
+  // 逐词拼接，已被覆盖的词不再重复（如 shuttle + run → 「折返跑」而不是「折返跑跑」）。
+  let label = '';
+  for (const word of words) if (!label.includes(word)) label += word;
+  return label || '其他项目';
+}
 
 export interface ScuFitnessItem {
   readonly label: string;
@@ -208,7 +264,7 @@ export function scuFitnessSummary(value: unknown): ScuFitnessSummary | null {
     const grade = text(value[`${base}_grade`]);
     const score = text(value[key]);
     if (!score && !grade) continue;
-    items.push({ label: FITNESS_LABELS[base] ?? base, score, grade });
+    items.push({ label: fitnessItemLabel(base), score, grade });
   }
   const info = Object.entries(FITNESS_INFO_LABELS)
     .map(([key, label]) => [label, text(value[key])] as const)

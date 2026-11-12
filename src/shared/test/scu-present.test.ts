@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  fitnessItemLabel,
   scuBalanceAmount,
   scuBalanceFields,
   scuClassRows,
@@ -155,6 +156,45 @@ describe('scuFitnessSummary', () => {
   it('非对象输入返回 null', () => {
     expect(scuFitnessSummary([])).toBeNull();
     expect(scuFitnessSummary('x')).toBeNull();
+  });
+
+  it('教务真实字段名全部转成中文，不把英文键名直接展示', () => {
+    const summary = scuFitnessSummary({
+      sex: '男',
+      studentYear: '2025',
+      total_score: 82.5,
+      total_grade: '良好',
+      bmi_score: 100,
+      bmi_grade: '正常',
+      vc_score: 3200,
+      vc_grade: '良好',
+      jump_score: 210,
+      jump_grade: '良好',
+      sit_and_reach_score: 12.3,
+      sit_and_reach_grade: '良好',
+      pull_and_sit_score: 15,
+      pull_and_sit_grade: '及格',
+      '50m_score': 7.2,
+      '50m_grade': '优秀',
+      run_score: 240,
+      run_grade: '良好',
+    });
+    expect(summary?.items.map(({ label }) => label)).toEqual([
+      '体重指数',
+      '肺活量',
+      '立定跳远',
+      '坐位体前屈',
+      '引体向上 / 仰卧起坐',
+      '50 米跑',
+      '耐力跑',
+    ]);
+    expect(summary?.student).toBe('性别 男 · 学年 2025');
+  });
+
+  it('未知分项键按词义拆译，实在认不出才归为其他项目', () => {
+    expect(fitnessItemLabel('high_weight')).toBe('身高体重');
+    expect(fitnessItemLabel('shuttle_run')).toBe('折返跑');
+    expect(fitnessItemLabel('mystery_metric')).toBe('其他项目');
   });
 });
 

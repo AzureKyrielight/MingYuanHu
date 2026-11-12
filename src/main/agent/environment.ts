@@ -152,13 +152,13 @@ const text = (value: unknown) => ({
   details: undefined,
 });
 
-/** 联网工具（默认关闭，设置 › 内置能力「网络」开启）。参数是纯 JSON Schema，Pi 走 JSON Schema 校验。 */
+/** 联网工具（默认开启，设置 › 内置能力「网络」可关）。参数是纯 JSON Schema，Pi 走 JSON Schema 校验。 */
 const webTools: ToolDefinition[] = [
   {
     name: 'web_search',
     label: 'web_search',
     description:
-      '联网搜索网页，返回标题、链接和摘要。使用用户在聊天输入框左下角选中的搜索服务（Brave / Google / DeepSeek / 自定义端点），未选中时调用会报错引导。freshness 仅 Brave 生效（pd/pw/pm/py）。',
+      '联网搜索网页，返回标题、链接和摘要。优先使用用户在聊天输入框左下角选中的搜索服务（Brave / Google / DeepSeek / 自定义端点）；一条都没配置时自动回退到免密钥的必应网页版，不需要用户先做设置。freshness 可选 pd/pw/pm/py（日/周/月/年），回退模式下同样生效。',
     parameters: {
       type: 'object',
       properties: {

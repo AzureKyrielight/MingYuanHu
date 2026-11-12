@@ -69,14 +69,14 @@ export function updateView(state: UpdateSnapshot): UpdateView {
       };
     case 'ready':
       return {
-        status: '更新已下载，安装时将退出 Dela 并打开安装向导',
+        status: '更新已下载，安装时会退出应用并自动完成升级',
         action: 'install',
-        label: '安装更新',
+        label: '重新启动并安装',
         progress: null,
       };
     case 'installing':
       return {
-        status: '正在打开安装向导，Dela 即将退出',
+        status: '正在退出并安装，应用会自动重启',
         action: null,
         label: null,
         progress: null,
@@ -133,7 +133,7 @@ export const useUpdateState = create<UpdateState>((set, get) => ({
     if (!api) return;
     attached = true;
     if (window.dela?.updatedOnLaunch) {
-      showToast({ variant: 'success', title: `已更新至 Dela ${window.dela.version}` });
+      showToast({ variant: 'success', title: `已更新至明远湖光 ${window.dela.version}` });
     }
     const receive = (snapshot: UpdateSnapshot) => {
       const previous = get().snapshot;
@@ -222,6 +222,9 @@ export async function runUpdateAction(action: UpdateAction): Promise<boolean> {
     else {
       const result = await api[action]();
       const current = useUpdateState.getState().snapshot;
+      // 用户主动点「检查更新」并发现有新版本时直接开始下载：按钮只点一下就能拿到安装包，
+      // 后台定时检查不走这里，不会在用户不知情时消耗流量。
+      if (action === 'check' && result.phase === 'available') return runUpdateAction('download');
       if (
         action === 'download' &&
         result.phase === 'ready' &&

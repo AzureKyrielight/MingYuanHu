@@ -58,10 +58,13 @@ jobs:
         shell: pwsh
         run: |
           $tag = '${{ inputs.tag || github.ref_name }}'
+          # latest.yml 是 electron-updater 的版本清单，缺了它应用内更新会直接报 feed-unavailable；
+          # *.blockmap 用于差分下载，一并上传。
           $files = @(Get-ChildItem dist -File |
-            Where-Object { $_.Name -like 'MingYuanHu-Setup-*' } |
+            Where-Object { $_.Name -like 'MingYuanHu-Setup-*' -or $_.Name -eq 'latest.yml' } |
             ForEach-Object { $_.FullName })
           if ($files.Count -eq 0) { throw 'No installer artifacts found in dist' }
+          if (-not (Test-Path 'dist/latest.yml')) { throw 'latest.yml missing: auto-update would break' }
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag @files --clobber

@@ -1,4 +1,6 @@
 /** 川大课表纯解析：不依赖 Electron，便于单元测试与复用。 */
+import { currentSemesterCode } from '../../shared/schedule';
+
 export interface ScuScheduleLesson {
   readonly sourceId: string;
   readonly courseCode: string;
@@ -37,11 +39,7 @@ function numberField(value: unknown): number {
 
 /** 当前学期的 SCU planCode（第三段 1=秋季、2=春季）。 */
 export function currentPlanCode(now = new Date()): string {
-  const year = now.getFullYear();
-  const month = now.getMonth() + 1;
-  if (month >= 8) return `${year}-${year + 1}-1-1`;
-  if (month <= 1) return `${year - 1}-${year}-1-1`;
-  return `${year - 1}-${year}-2-1`;
+  return currentSemesterCode(now);
 }
 
 export function isPlanCode(value: string): boolean {

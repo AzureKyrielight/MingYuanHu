@@ -54,8 +54,13 @@ const sponsorChannelMeta: Record<SponsorChannelKind, { dotClass: string; label: 
 };
 
 const projectLinks: { icon: ReactNode; label: string; url: string }[] = [
-  { icon: <Globe />, label: '官网', url: 'https://dela.changyo.me' },
-  { icon: <GithubMark />, label: 'GitHub 仓库', url: 'https://github.com/Chang-Yo/Dela' },
+  { icon: <Feather />, label: '个人博客', url: 'https://lyuumine.cn/' },
+  { icon: <GithubMark />, label: 'GitHub', url: 'https://github.com/AzureKyrielight' },
+  {
+    icon: <Globe />,
+    label: '项目仓库',
+    url: 'https://github.com/AzureKyrielight/MingYuanHu',
+  },
 ];
 
 function PersonLinks({ links }: { links: SocialLink[] }) {
@@ -131,6 +136,7 @@ function SponsorDialog({ person, trigger }: { person: CreditPerson; trigger: Rea
 }
 
 function PersonIdentity({ person }: { person: CreditPerson }) {
+  const initials = (person.name.trim()[0] ?? '湖').toUpperCase();
   return (
     <div className="flex items-center gap-2.5">
       {person.logo ? (
@@ -147,13 +153,21 @@ function PersonIdentity({ person }: { person: CreditPerson }) {
             src={person.logo.dark}
           />
         </span>
-      ) : (
+      ) : person.avatar ? (
         <img
           alt=""
           aria-hidden="true"
           className="size-6 rounded-full object-cover"
           src={person.avatar}
         />
+      ) : (
+        // 没有头像素材时用首字母块，不依赖外网头像链接。
+        <span
+          aria-hidden="true"
+          className="grid size-6 shrink-0 place-items-center rounded-full bg-hover-2 text-2xs font-medium text-ink-2"
+        >
+          {initials}
+        </span>
       )}
       <span className="text-13 font-medium text-ink">{person.name}</span>
     </div>
@@ -194,9 +208,6 @@ function CreditSectionBlock({ section }: { section: CreditSection }) {
 }
 
 export function AboutSection() {
-  const authorSection = creditSections.find((section) => section.title === 'Author');
-  const contributorsSection = creditSections.find((section) => section.title === 'Contributors');
-  const sponsorsSection = creditSections.find((section) => section.title === 'Sponsors');
   return (
     <div className="grid gap-10" data-setting-id="about">
       <SectionHeader title="关于" />
@@ -215,9 +226,9 @@ export function AboutSection() {
           ))}
         </div>
       </section>
-      {authorSection ? <CreditSectionBlock section={authorSection} /> : null}
-      {contributorsSection ? <CreditSectionBlock section={contributorsSection} /> : null}
-      {sponsorsSection ? <CreditSectionBlock section={sponsorsSection} /> : null}
+      {creditSections.map((section) => (
+        <CreditSectionBlock key={section.title} section={section} />
+      ))}
     </div>
   );
 }

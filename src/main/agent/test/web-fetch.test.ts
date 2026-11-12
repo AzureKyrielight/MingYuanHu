@@ -221,6 +221,28 @@ describe('web_fetch', () => {
     expect(await readdir(join(profile.root, 'dela-document-reading'))).toEqual([]);
   });
 
+  it('纯前端渲染的页面提取过少时兜底抓取正文与链接并说明原因', async () => {
+    const html = `<html><head><title>App</title></head><body>
+      <div id="root"></div>
+      <script>${'window.__DATA__ = 1;'.repeat(200)}</script>
+      <a href="https://example.com/docs/intro">入门文档</a>
+      <a href="https://example.com/docs/api">API 参考</a>
+    </body></html>`;
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8' } }),
+        ),
+    );
+    const page = await fetchWebPage('https://example.com/app');
+    expect(page.text).toContain('入门文档');
+    expect(page.text).toContain('[API 参考](https://example.com/docs/api)');
+    expect(page.text).not.toContain('window.__DATA__');
+    expect(page.note).toContain('JavaScript 动态渲染');
+  });
+
   it('普通网页仍按 2 MiB 截断并说明内容不完整', async () => {
     vi.stubGlobal(
       'fetch',

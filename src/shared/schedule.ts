@@ -34,6 +34,15 @@ const wangJiangHuaXiPeriods = [
 
 export type ClassPeriod = readonly [number, number];
 
+/** 当前学期的 SCU planCode（第三段 1=秋季、2=春季）。主进程与渲染层共用同一算法。 */
+export function currentSemesterCode(now = new Date()): string {
+  const year = now.getFullYear();
+  const month = now.getMonth() + 1;
+  if (month >= 8) return `${year}-${year + 1}-1-1`;
+  if (month <= 1) return `${year - 1}-${year}-1-1`;
+  return `${year - 1}-${year}-2-1`;
+}
+
 /** 按校区返回节次时段；无法识别时用江安（最常见）作息。 */
 export function classPeriodsFor(campus: string | null | undefined): readonly ClassPeriod[] {
   if (campus && /望江|华西/.test(campus)) return wangJiangHuaXiPeriods;

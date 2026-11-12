@@ -17,6 +17,7 @@ import { StepButton, StepInput, StepSelect, type StepButtonState } from './step-
 import { StepGuide } from './step-guide';
 import { StepModelImportDialog } from './step-model-import';
 import { capModels } from './model-import';
+import { ProviderLogo, providerLogoId } from '../../settings/components/provider-logos';
 import { llmProviderPresets, findLlmPreset } from '../../../../shared/llm-presets';
 import type { LlmVerifyResult } from '../../../../shared/api';
 
@@ -40,7 +41,7 @@ export function LlmStep({ onDone }: { onDone: () => void }) {
     return (
       <DesktopOnlyNotice
         description="模型服务的凭据不会暴露给浏览器。"
-        title="模型服务仅在 Dela 桌面端可用"
+        title="模型服务仅在明远湖光桌面端可用"
       />
     );
   }
@@ -132,7 +133,10 @@ export function LlmStep({ onDone }: { onDone: () => void }) {
                 <StepSelect label="服务商" onValueChange={applyPreset} value={presetId}>
                   {llmProviderPresets.map((item) => (
                     <SelectItem key={item.id} value={item.id}>
-                      {item.name}
+                      <span className="flex items-center gap-2">
+                        <ProviderLogo className="size-4" id={providerLogoId(item.id, item.name)} />
+                        {item.name}
+                      </span>
                     </SelectItem>
                   ))}
                 </StepSelect>

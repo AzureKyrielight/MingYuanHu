@@ -39,11 +39,13 @@ import {
   listWebSearchEntries,
   listWebSearchKeySources,
   listWebSearchOptions,
+  parseBingResults,
   readWebSearchConfig,
   readWebSearchKey,
   removeWebSearchEntry,
   saveWebSearchEntry,
   selectWebSearchEntry,
+  webSearch,
 } from '../web-search';
 
 beforeEach(() => {
@@ -170,4 +172,48 @@ it('密钥导入只认官方端点且中转网关不算 DeepSeek', () => {
   expect(sources).toEqual([{ id: 'p1', name: 'DeepSeek 官方' }]);
   expect(readWebSearchKey('p1')).toBe('sk-school');
   expect(readWebSearchKey('p2')).toBeNull();
+});
+
+it('解析必应结果页的标题、链接与摘要', () => {
+  const html = `
+    <li class="b_algo"><h2><a target="_blank" href="https://example.com/a" h="ID=1">示例 <strong>A</strong></a></h2>
+      <div class="b_caption"><p class="b_lineclamp2">摘要&nbsp;A&ensp;正文</p></div></li>
+    <li class="b_algo"><h2><a href="https://example.com/b">示例 B</a></h2>
+      <div class="b_caption"><p>摘要 B</p></div></li>
+    <li class="b_algo"><h2><a href="https://example.com/c">无摘要</a></h2></li>`;
+  expect(parseBingResults(html)).toEqual([
+    { url: 'https://example.com/a', title: '示例 A', snippet: '摘要 A 正文' },
+    { url: 'https://example.com/b', title: '示例 B', snippet: '摘要 B' },
+    { url: 'https://example.com/c', title: '无摘要', snippet: '' },
+  ]);
+});
+
+it('没配搜索服务时自动回退到免密钥的必应网页版', async () => {
+  expect(readWebSearchConfig()).toBeNull();
+  const html = `<li class="b_algo"><h2><a href="https://example.com/a">示例</a></h2>
+    <div class="b_caption"><p>摘要</p></div></li>`;
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValue(new Response(html, { headers: { 'content-type': 'text/html' } }));
+  vi.stubGlobal('fetch', fetchMock);
+  const result = await webSearch('示例 查询', 3);
+  expect(String(fetchMock.mock.calls[0]?.[0])).toContain('cn.bing.com/search');
+  expect(result).toMatchObject({ provider: 'bing', fallback: true });
+  expect(result.results).toEqual([
+    { url: 'https://example.com/a', title: '示例', snippet: '摘要' },
+  ]);
+  vi.unstubAllGlobals();
+});
+
+it('必应回退解析为空时报错并引导手动配置', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi
+      .fn()
+      .mockResolvedValue(
+        new Response('<html>无结果</html>', { headers: { 'content-type': 'text/html' } }),
+      ),
+  );
+  await expect(webSearch('示例', 3)).rejects.toThrow(/配置搜索服务/);
+  vi.unstubAllGlobals();
 });

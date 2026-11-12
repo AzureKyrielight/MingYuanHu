@@ -60,7 +60,7 @@ export async function exportSession(id: string, owner: BrowserWindow | null) {
   const { title } = row(id);
   const options = {
     title: '导出会话',
-    defaultPath: 'Dela - ' + (safeName(title) || '会话') + '.zip',
+    defaultPath: '明远湖光 - ' + (safeName(title) || '会话') + '.zip',
     filters: [{ name: 'ZIP', extensions: ['zip'] }],
   };
   const { canceled, filePath } = owner
