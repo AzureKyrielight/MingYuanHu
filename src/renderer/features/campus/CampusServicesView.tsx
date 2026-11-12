@@ -9,7 +9,6 @@ import {
   ListTree,
   LoaderCircle,
   Megaphone,
-  PlugZap,
   Printer,
   Trophy,
   Wifi,
@@ -106,7 +105,7 @@ function ErrorText({ result }: { result: Extract<ScuResult<unknown>, { ok: false
   return (
     <div className="rounded-lg border border-red/30 bg-red-tint/40 px-3 py-2 text-sm text-red">
       {result.error}
-      {result.auth ? '（请先点击右上角“连接统一认证”）' : ''}
+      {result.auth ? '（请先在左下角完成校园登录）' : ''}
     </div>
   );
 }
@@ -2209,8 +2208,6 @@ export function CampusServicesView() {
 function DesktopCampusServices() {
   const [tab, setTab] = useState<TabId>('grades');
   const [state, setState] = useState<ScuConnectionState | null>(null);
-  const [connecting, setConnecting] = useState(false);
-  const [connectError, setConnectError] = useState<string | null>(null);
   const [identity, setIdentity] = useState<ScuIdentityState | null>(null);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -2232,19 +2229,15 @@ function DesktopCampusServices() {
     void refreshIdentity();
   }, [refreshState, refreshIdentity]);
 
-  const connect = async () => {
-    if (!window.dela) return;
-    setConnectError(null);
-    setConnecting(true);
-    const result = await window.dela.scu.connect();
-    setConnecting(false);
-    if (!result.ok) {
-      setConnectError(result.error);
-      setState({ connected: false, principal: null, name: null });
-      return;
-    }
-    await refreshState();
-  };
+  // 校园登录入口在左下角侧栏：切回本页时刷新状态。
+  useEffect(() => {
+    const refresh = () => {
+      void refreshState();
+      void refreshIdentity();
+    };
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, [refreshState, refreshIdentity]);
 
   const loginToken = async () => {
     if (!window.dela) return;
@@ -2279,32 +2272,20 @@ function DesktopCampusServices() {
             教务、电费、体测、校园卡与办事大厅数据来自四川大学各业务系统。
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="text-right text-xs text-ink-3">
-            {state?.connected ? (
-              <>
-                <p className="text-ink-2">
-                  {state.name ?? '已连接'}
-                  {state.principal ? ` · ${state.principal}` : ''}
-                </p>
-                <p>统一身份认证会话有效</p>
-              </>
-            ) : (
-              <p>尚未连接统一身份认证</p>
-            )}
-          </div>
-          <Button size="sm" onClick={() => void connect()} disabled={connecting}>
-            <PlugZap className="size-4" />
-            {connecting ? '登录中…' : state?.connected ? '重新登录' : '连接统一认证'}
-          </Button>
+        <div className="text-right text-xs text-ink-3">
+          {state?.connected ? (
+            <>
+              <p className="text-ink-2">
+                {state.name ?? '已连接'}
+                {state.principal ? ` · ${state.principal}` : ''}
+              </p>
+              <p>统一身份认证会话有效</p>
+            </>
+          ) : (
+            <p>尚未连接统一身份认证</p>
+          )}
         </div>
       </header>
-
-      {connectError && (
-        <p className="text-sm text-red" role="alert">
-          {connectError}
-        </p>
-      )}
 
       <section className="rounded-lg border border-line bg-surface px-4 py-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -2362,42 +2343,48 @@ function DesktopCampusServices() {
         )}
       </section>
 
-      <nav className="flex flex-wrap gap-1 rounded-lg bg-inset p-1">
-        {tabs.map((item) => {
-          const Icon = item.icon;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              className={cn(
-                'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors',
-                tab === item.id ? 'bg-surface text-ink shadow-sm' : 'text-ink-3 hover:text-ink-2',
-              )}
-              onClick={() => setTab(item.id)}
-            >
-              <Icon className="size-4" />
-              {item.label}
-            </button>
-          );
-        })}
-      </nav>
+      <div className="grid min-h-0 gap-4 lg:grid-cols-[12rem_minmax(0,1fr)]">
+        <nav
+          aria-label="校园服务"
+          className="flex shrink-0 gap-1 overflow-x-auto rounded-lg bg-inset p-1 lg:h-fit lg:flex-col lg:overflow-visible"
+        >
+          {tabs.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                aria-current={tab === item.id ? 'page' : undefined}
+                className={cn(
+                  'flex shrink-0 items-center gap-2 rounded-md px-3 py-1.5 text-sm transition-colors lg:w-full',
+                  tab === item.id ? 'bg-surface text-ink shadow-sm' : 'text-ink-3 hover:text-ink-2',
+                )}
+                onClick={() => setTab(item.id)}
+              >
+                <Icon className="size-4" />
+                {item.label}
+              </button>
+            );
+          })}
+        </nav>
 
-      <div className="min-h-0">
-        {tab === 'grades' && <GradesPanel />}
-        {tab === 'exams' && <ExamsPanel />}
-        {tab === 'balance' && <BalancePanel />}
-        {tab === 'fitness' && <FitnessPanel />}
-        {tab === 'card' && <CardPanel />}
-        {tab === 'service' && <ServicePanel />}
-        {tab === 'service' && <ServiceStartCard />}
-        {tab === 'ccyl' && <CcylPanel />}
-        {tab === 'repair' && <RepairPanel />}
-        {tab === 'net' && <PasspointPanel />}
-        {tab === 'classroom' && <ClassroomPanel />}
-        {tab === 'program' && <ProgramPanel />}
-        {tab === 'schedule' && <ScheduleInquiryPanel />}
-        {tab === 'notice' && <NoticePanel />}
-        {tab === 'print' && <CloudPrintPanel />}
+        <div className="min-h-0">
+          {tab === 'grades' && <GradesPanel />}
+          {tab === 'exams' && <ExamsPanel />}
+          {tab === 'balance' && <BalancePanel />}
+          {tab === 'fitness' && <FitnessPanel />}
+          {tab === 'card' && <CardPanel />}
+          {tab === 'service' && <ServicePanel />}
+          {tab === 'service' && <ServiceStartCard />}
+          {tab === 'ccyl' && <CcylPanel />}
+          {tab === 'repair' && <RepairPanel />}
+          {tab === 'net' && <PasspointPanel />}
+          {tab === 'classroom' && <ClassroomPanel />}
+          {tab === 'program' && <ProgramPanel />}
+          {tab === 'schedule' && <ScheduleInquiryPanel />}
+          {tab === 'notice' && <NoticePanel />}
+          {tab === 'print' && <CloudPrintPanel />}
+        </div>
       </div>
     </div>
   );

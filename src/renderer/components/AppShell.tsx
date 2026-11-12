@@ -16,6 +16,7 @@ import {
   Minus,
   PanelLeft,
   PanelLeftClose,
+  PlugZap,
   Search,
   Settings,
   Square,
@@ -791,6 +792,20 @@ export function AppShell({
             sourcesActive={sourcesActive}
           />
           <div className="grid shrink-0 gap-0.5 pt-2">
+            <button
+              className={navRow(false)}
+              onClick={() => {
+                navigate('campus');
+                void window.dela?.scu.connect();
+              }}
+              title="连接或重新登录四川大学统一身份认证"
+              type="button"
+            >
+              <PlugZap className={navIcon(false)} strokeWidth={1.8} />
+              <span className={cn('truncate', labelFade, sidebarCollapsed && 'opacity-0')}>
+                校园登录
+              </span>
+            </button>
             <button
               aria-current={view === 'settings' ? 'page' : undefined}
               className={navRow(view === 'settings')}
