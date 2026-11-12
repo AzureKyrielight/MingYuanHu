@@ -2,10 +2,40 @@
 import type { ScuExam, ScuSemester } from '../../shared/scu';
 import { CampusAuthError } from '../campus';
 import { assertAuthenticated, parseJson, scuRequest } from './client';
+import { bindIdentitySession, ssoAuthorization } from './identity';
 export { currentPlanCode, isPlanCode, parseScheduleCourses } from './schedule';
 export type { ParsedSchedule, ScuScheduleLesson } from './schedule';
 
 export const ZHJW_BASE = 'http://zhjw.scu.edu.cn';
+/** 统一认证 → 教务的 SSO 入口；带 Bearer 走中继即可建立教务会话。 */
+const ZHJW_SSO = `${'https://id.scu.edu.cn'}/enduser/sp/sso/scdxplugin_jwt23?enterpriseId=scdx&target_url=index`;
+
+let bound = false;
+
+export function resetZhjwSession(): void {
+  bound = false;
+}
+
+/**
+ * 用统一认证会话建立教务 cookie（jwt23 中继）。
+ * 密码登录只拿到访问令牌，教务走的是自己的 CAS cookie，不补这一步就会报「教务 session 已过期」。
+ */
+export async function bindZhjwSession(): Promise<void> {
+  if (bound) return;
+  if (!(await bindIdentitySession())) return;
+  const response = await scuRequest(ZHJW_SSO, {
+    headers: { Accept: 'text/html,application/xhtml+xml,*/*', ...ssoAuthorization() },
+    timeoutMs: 30_000,
+  });
+  if (response.status < 200 || response.status >= 400) {
+    throw new Error(`教务单点登录失败（HTTP ${response.status}）`);
+  }
+  // 中继没落在教务首页说明统一认证侧没认下来（会停在 id 登录页）。
+  if (!response.url.startsWith(ZHJW_BASE)) {
+    throw new CampusAuthError('教务会话建立失败，请重新登录统一身份认证');
+  }
+  bound = true;
+}
 
 const ZHTML_HEADERS = {
   Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -32,6 +62,7 @@ function stripHtml(value: string): string {
 
 /** 当前教学周；假期返回 week=0。 */
 export async function fetchCurrentWeek(): Promise<{ week: number; onVacation: boolean }> {
+  await bindZhjwSession();
   const response = await scuRequest(`${ZHJW_BASE}/`, { headers: ZHTML_HEADERS });
   assertAuthenticated(response, '教务系统');
   const match = WEEK_PATTERN.exec(response.body);
@@ -42,6 +73,7 @@ export async function fetchCurrentWeek(): Promise<{ week: number; onVacation: bo
 
 /** 学期列表；value 即课表所需的 planCode。 */
 export async function fetchSemesters(): Promise<ScuSemester[]> {
+  await bindZhjwSession();
   const response = await scuRequest(
     `${ZHJW_BASE}/student/courseSelect/calendarSemesterCurriculum/index`,
     { headers: ZHTML_HEADERS },
@@ -59,6 +91,7 @@ export async function fetchSemesters(): Promise<ScuSemester[]> {
 
 /** 指定学期的课表原始 JSON（结构见 parseScheduleCourses）。 */
 export async function fetchSchedule(planCode: string): Promise<unknown> {
+  await bindZhjwSession();
   const response = await scuRequest(
     `${ZHJW_BASE}/student/courseSelect/thisSemesterCurriculum/ajaxStudentSchedule/callback`,
     {
@@ -74,6 +107,7 @@ export async function fetchSchedule(planCode: string): Promise<unknown> {
 
 /** 及格成绩 / 方案成绩（教务页面先给 callback 路径，再取 JSON）。 */
 export async function fetchGrades(scheme = false): Promise<unknown> {
+  await bindZhjwSession();
   const kind = scheme ? 'schemeScores' : 'allPassingScores';
   const indexPath = `${ZHJW_BASE}/student/integratedQuery/scoreQuery/${kind}/index`;
   const index = await scuRequest(indexPath, { headers: ZHTML_HEADERS });
@@ -115,6 +149,7 @@ function firstGroup(pattern: RegExp, value: string): string {
 
 /** 考表（教务 HTML 卡片解析）。 */
 export async function fetchExams(): Promise<ScuExam[]> {
+  await bindZhjwSession();
   const response = await scuRequest(`${ZHJW_BASE}/student/examinationManagement/examPlan/index`, {
     headers: ZHTML_HEADERS,
   });

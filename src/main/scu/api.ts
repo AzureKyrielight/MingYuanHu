@@ -23,7 +23,14 @@ import {
 } from '../campus';
 import { fetchCardHistory, fetchUserProfile, identityOf, resetWfw } from './wfw';
 import { resetScuCookies } from './client';
-import { currentPlanCode, fetchCurrentWeek, fetchExams, fetchGrades, fetchSemesters } from './zhjw';
+import {
+  currentPlanCode,
+  fetchCurrentWeek,
+  fetchExams,
+  fetchGrades,
+  fetchSemesters,
+  resetZhjwSession,
+} from './zhjw';
 import {
   fetchBuildings,
   fetchCampus,
@@ -236,6 +243,7 @@ export function resetScuSubsystems(): void {
   resetCcyl();
   resetRepair();
   resetPasspoint();
+  resetZhjwSession();
 }
 
 /** 云打印（只读）：会话检查与任务列表。 */
