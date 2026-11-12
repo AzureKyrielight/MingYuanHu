@@ -29,6 +29,7 @@ output/playwright/
 *.sqlite
 *.sqlite-*
 *.log
+HANDOFF.md
 .DS_Store
 Thumbs.db
 .idea/

@@ -19,7 +19,6 @@ const smokes: Record<string, SmokeConfig> = {
   },
   'workspace-smoke': { external: [], timeout: 60000 },
   'scu-login-probe': { external: ['sm-crypto'], timeout: 120000, minify: false },
-  'scu-app-probe': { external: ['sm-crypto'], timeout: 240000, minify: false },
   'remote-smoke': {
     external: [
       // 原生模块必须留在 node_modules：打进 bundle 后 node-pty 找不到自己的 prebuilds。
@@ -58,7 +57,6 @@ await build({
   },
 });
 const require = createRequire(import.meta.url);
-if (process.argv.includes('--build-only')) process.exit(0);
 const result = spawnSync(require('electron') as string, [`.tools/${name}.cjs`], {
   stdio: 'inherit',
   timeout: smoke.timeout,
