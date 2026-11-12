@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   CalendarClock,
+  ExternalLink,
   FileUp,
   LoaderCircle,
   Plus,
@@ -185,21 +186,32 @@ export function ServiceStartCard() {
     <Section
       title="发起事项（动态表单）"
       actions={
-        <Button disabled={busy} onClick={() => void load()} size="sm" variant="secondary">
-          {busy ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}
-          读取表单
+        <Button
+          disabled={busy}
+          onClick={() =>
+            void window.dela?.window.openExternal('https://service.scu.edu.cn/v2/matter/')
+          }
+          size="sm"
+          variant="ghost"
+        >
+          <ExternalLink className="size-4" />
+          打开办事大厅
         </Button>
       }
     >
+      <p className="text-xs text-ink-3">
+        在应用内填写办事大厅的事项表单并提交，提交后到「我的申请」查看进度。 事项 ID
+        是办事大厅事项页地址栏里的 id，粘贴到下方即可读取表单。
+      </p>
       <div className="flex gap-2">
         <Input
           placeholder="事项 ID，例如 1234"
           value={appId}
           onChange={(event) => setAppId(event.target.value)}
         />
-        <Button disabled={busy} onClick={() => void submit()} size="sm">
-          <Send />
-          提交
+        <Button disabled={busy} onClick={() => void load()} size="sm" variant="secondary">
+          {busy ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}
+          读取表单
         </Button>
       </div>
       <ErrorLine message={error} />
@@ -243,6 +255,10 @@ export function ServiceStartCard() {
               {field.hint ? <span className="text-xs text-ink-3">{field.hint}</span> : null}
             </label>
           ))}
+          <Button disabled={busy} onClick={() => void submit()} size="sm">
+            <Send />
+            提交
+          </Button>
         </div>
       ) : null}
     </Section>
@@ -440,6 +456,32 @@ function mapCcylActivity(raw: unknown): CcylActivityRow {
   };
 }
 
+interface CcylSessionRow {
+  id: string;
+  name: string;
+  start: string;
+  enroll: string;
+  open: boolean;
+}
+
+function mapCcylSession(raw: unknown): CcylSessionRow {
+  const value = isRecord(raw) ? raw : {};
+  const enrollStart = textOf(value.enrollStartTime);
+  const enrollEnd = textOf(value.enrollEndTime);
+  const startAt = Date.parse(enrollStart);
+  const endAt = Date.parse(enrollEnd);
+  const now = Date.now();
+  return {
+    id: textOf(value.activityId) || textOf(value.id),
+    name: textOf(value.activityName) || textOf(value.name) || '未命名场次',
+    start: textOf(value.startTime).slice(0, 16),
+    enroll:
+      enrollStart && enrollEnd ? `${enrollStart.slice(0, 16)} 至 ${enrollEnd.slice(0, 16)}` : '',
+    open:
+      Number.isFinite(startAt) && Number.isFinite(endAt) ? now >= startAt && now <= endAt : true,
+  };
+}
+
 export function CcylPanel() {
   const [keyword, setKeyword] = useState('');
   const [rows, setRows] = useState<CcylActivityRow[]>([]);
@@ -448,6 +490,9 @@ export function CcylPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [openLibrary, setOpenLibrary] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<Record<string, CcylSessionRow[]>>({});
+  const [sessionBusy, setSessionBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -477,23 +522,46 @@ export function CcylPanel() {
     void load();
   }, [load]);
 
-  const signUp = async (row: CcylActivityRow) => {
+  /** 活动库行本身没有场次 id，展开后按场次报名。 */
+  const toggleSessions = async (row: CcylActivityRow) => {
+    const libraryId = row.libraryId || row.id;
+    if (!libraryId) return;
+    if (openLibrary === libraryId) {
+      setOpenLibrary(null);
+      return;
+    }
+    setOpenLibrary(libraryId);
+    if (sessions[libraryId]) return;
+    setSessionBusy(libraryId);
+    setError(null);
+    try {
+      const result = await window.dela!.scu.ccylLibrary(libraryId);
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      const data = isRecord(result.data) ? result.data : {};
+      const list = Array.isArray(data.activities) ? data.activities : [];
+      setSessions((current) => ({ ...current, [libraryId]: list.map(mapCcylSession) }));
+    } finally {
+      setSessionBusy(null);
+    }
+  };
+
+  const signUpSession = async (libraryId: string, session: CcylSessionRow) => {
     setBusy(true);
     setError(null);
     setNotice(null);
     try {
       let scoreType = '';
-      const types = await window.dela!.scu.ccylScoreTypes(row.libraryId || row.id);
+      const types = await window.dela!.scu.ccylScoreTypes(libraryId);
       if (types.ok && Array.isArray(types.data) && types.data.length > 0) {
         const first = types.data[0];
         scoreType = textOf(isRecord(first) ? (first.value ?? first.code ?? first.id) : first);
       }
-      const result = await window.dela!.scu.ccylSignUp(row.id, scoreType);
+      const result = await window.dela!.scu.ccylSignUp(session.id, scoreType);
       if (!result.ok) setError(result.error);
-      else {
-        setNotice(`已报名：${row.name}`);
-        void load();
-      }
+      else setNotice(`已报名：${session.name}`);
     } finally {
       setBusy(false);
     }
@@ -550,35 +618,78 @@ export function CcylPanel() {
         </ul>
       ) : (
         <ul className="divide-y text-13">
-          {rows.map((row) => (
-            <li className="flex items-center justify-between gap-3 py-2" key={row.id}>
-              <div className="min-w-0">
-                <p className="truncate">{row.name}</p>
-                <p className="truncate text-xs text-ink-3">
-                  {[row.org, row.time, row.status].filter(Boolean).join(' · ')}
-                </p>
-              </div>
-              {mode === 'search' ? (
-                <Button disabled={busy || !row.id} onClick={() => void signUp(row)} size="sm">
-                  报名
-                </Button>
-              ) : (
-                <Button
-                  disabled={busy || !row.id}
-                  onClick={() =>
-                    void window.dela!.scu.ccylCancel(row.id).then((result) => {
-                      if (!result.ok) setError(result.error);
-                      else void load();
-                    })
-                  }
-                  size="sm"
-                  variant="ghost"
-                >
-                  取消
-                </Button>
-              )}
-            </li>
-          ))}
+          {rows.map((row) => {
+            const libraryId = row.libraryId || row.id;
+            const expandable = mode === 'search' && Boolean(libraryId);
+            const list = sessions[libraryId] ?? [];
+            return (
+              <li className="py-2" key={row.id || libraryId}>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate">{row.name}</p>
+                    <p className="truncate text-xs text-ink-3">
+                      {[row.org, row.time, row.status].filter(Boolean).join(' · ')}
+                    </p>
+                  </div>
+                  {mode === 'search' ? (
+                    <Button
+                      disabled={!expandable || sessionBusy === libraryId}
+                      onClick={() => void toggleSessions(row)}
+                      size="sm"
+                      variant={openLibrary === libraryId ? 'secondary' : 'ghost'}
+                    >
+                      {sessionBusy === libraryId
+                        ? '读取…'
+                        : openLibrary === libraryId
+                          ? '收起场次'
+                          : '场次'}
+                    </Button>
+                  ) : (
+                    <Button
+                      disabled={busy || !row.id}
+                      onClick={() =>
+                        void window.dela!.scu.ccylCancel(row.id).then((result) => {
+                          if (!result.ok) setError(result.error);
+                          else void load();
+                        })
+                      }
+                      size="sm"
+                      variant="ghost"
+                    >
+                      取消
+                    </Button>
+                  )}
+                </div>
+                {expandable && openLibrary === libraryId ? (
+                  <ul className="mt-2 grid gap-1 border-l border-line pl-3 text-xs">
+                    {list.length === 0 && sessionBusy !== libraryId ? (
+                      <li className="text-ink-3">该活动暂无场次</li>
+                    ) : null}
+                    {list.map((session) => (
+                      <li className="flex items-center justify-between gap-3" key={session.id}>
+                        <div className="min-w-0">
+                          <p className="truncate text-ink-2">{session.name}</p>
+                          <p className="truncate text-ink-3">
+                            {[session.start, session.enroll && `报名 ${session.enroll}`]
+                              .filter(Boolean)
+                              .join(' · ')}
+                          </p>
+                        </div>
+                        <Button
+                          disabled={busy || !session.id || !session.open}
+                          onClick={() => void signUpSession(libraryId, session)}
+                          size="sm"
+                          title={session.open ? undefined : '不在报名时间内'}
+                        >
+                          {session.open ? '报名' : '未开放'}
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </li>
+            );
+          })}
           {rows.length === 0 && !busy ? <li className="py-2 text-ink-3">暂无活动</li> : null}
         </ul>
       )}
