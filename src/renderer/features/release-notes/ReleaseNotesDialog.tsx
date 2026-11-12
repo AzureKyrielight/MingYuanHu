@@ -25,7 +25,7 @@ export function ReleaseNotesDialog() {
           <Dialog.Description className="sr-only">本次更新的主要变化</Dialog.Description>
           <div className="mt-4 grid max-h-[60vh] gap-4 overflow-y-auto">
             {notes.map((note) => (
-              <section className="grid gap-1.5" key={note.version}>
+              <section className="grid gap-1.5" key={`${note.version}-${note.date}`}>
                 {notes.length > 1 && (
                   <h3 className="text-xs font-medium text-ink-3">
                     {note.version} · {note.date}

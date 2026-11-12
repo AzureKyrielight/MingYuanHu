@@ -41,12 +41,19 @@ export function notesBetween(
   lastSeen: string,
   current: string,
 ): ReleaseNote[] {
-  return notes
-    .filter(
-      (note) =>
-        compareVersions(note.version, lastSeen) > 0 && compareVersions(note.version, current) <= 0,
-    )
-    .sort((a, b) => compareVersions(b.version, a.version));
+  return (
+    notes
+      .filter(
+        (note) =>
+          compareVersions(note.version, lastSeen) > 0 &&
+          compareVersions(note.version, current) <= 0,
+      )
+      // 同名版本（fork 前上游历史可能与本仓库版本号撞车）用日期稳定排序。
+      .sort((a, b) => {
+        const diff = compareVersions(b.version, a.version);
+        return diff !== 0 ? diff : b.date.localeCompare(a.date);
+      })
+  );
 }
 
 /**
