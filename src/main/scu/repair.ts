@@ -11,7 +11,7 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { basename } from 'node:path';
-import { CampusAuthError } from '../campus';
+import { CAMPUS_USER_AGENT, CampusAuthError } from '../campus';
 import { describeResponse, scuDebug, scuRequest, type ScuResponse } from './client';
 import { bindIdentitySession, ssoAuthorization } from './identity';
 import { buildMultipart, contentTypeFor } from './multipart';
@@ -116,8 +116,7 @@ async function login(): Promise<string> {
   const redirect = await scuRequest(CAS_URL, {
     headers: {
       Accept: 'text/html,application/xhtml+xml,*/*',
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+      'User-Agent': CAMPUS_USER_AGENT,
       ...ssoAuthorization(),
     },
     timeoutMs: 30_000,
@@ -147,7 +146,7 @@ async function login(): Promise<string> {
       'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
       Origin: 'https://zhhq.scu.edu.cn',
       Referer: 'https://zhhq.scu.edu.cn/account/login',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0 Safari/537.36',
+      'User-Agent': CAMPUS_USER_AGENT,
       'X-Requested-With': 'XMLHttpRequest',
     },
     body: form.toString(),
@@ -174,8 +173,7 @@ function headers(key: string, jsonBody: boolean): Record<string, string> {
       : 'application/x-www-form-urlencoded; charset=UTF-8',
     Origin: 'https://zhhq.scu.edu.cn',
     Referer: 'https://zhhq.scu.edu.cn/ihome/newrepair',
-    'User-Agent':
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+    'User-Agent': CAMPUS_USER_AGENT,
     'X-Requested-With': 'XMLHttpRequest',
     Token: buildRepairToken(key),
     TokenKey: key,

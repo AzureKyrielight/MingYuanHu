@@ -5,7 +5,7 @@ import { app, safeStorage } from 'electron';
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { sm2 } from 'sm-crypto';
-import { CampusAuthError } from '../campus';
+import { CAMPUS_USER_AGENT, CampusAuthError } from '../campus';
 import { dropScuCookies, scuRequest, setSsoAuthHeadersProvider } from './client';
 import { recognizeCaptchaBase64 } from './ocr/captcha';
 
@@ -20,8 +20,7 @@ const ID_HEADERS: Record<string, string> = {
   'Content-Type': 'application/json;charset=UTF-8',
   Origin: ID_BASE,
   Referer: `${ID_BASE}/frontend/login`,
-  'User-Agent':
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+  'User-Agent': CAMPUS_USER_AGENT,
 };
 
 export interface ScuIdentityState {
@@ -152,6 +151,11 @@ export async function bindIdentitySession(): Promise<boolean> {
   }
   if (response.status < 200 || response.status >= 300) {
     throw new Error(`统一认证 session/save 失败（HTTP ${response.status}）`);
+  }
+  // 827 + browser mismatch：token 是在别的 UA 下签发的，只能重新登录。
+  if (/"code"\s*:\s*"?827"?/.test(response.body) || /browser mismatch/i.test(response.body)) {
+    clearIdentity();
+    throw new CampusAuthError('统一认证会话已失效，请重新登录');
   }
   const body = bodyJson<{ success?: unknown; error?: unknown }>(response.body, '统一认证');
   if (typeof body.error === 'string' && /invalid_token/i.test(body.error)) {

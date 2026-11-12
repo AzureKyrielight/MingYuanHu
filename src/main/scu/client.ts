@@ -6,7 +6,7 @@
 import { session } from 'electron';
 import { request as httpRequest, type IncomingHttpHeaders } from 'node:http';
 import { request as httpsRequest } from 'node:https';
-import { CAMPUS_PARTITION, CampusAuthError } from '../campus';
+import { CAMPUS_PARTITION, CAMPUS_USER_AGENT, CampusAuthError } from '../campus';
 import { CookieJar, seedCookie } from './cookie-jar';
 
 const REQUEST_TIMEOUT_MS = 20_000;
@@ -203,9 +203,8 @@ function resolveLocation(location: string, base: string): string {
 export async function scuRequest(url: string, init: ScuRequestInit = {}): Promise<ScuResponse> {
   const cookies = await cookieJar();
   const headers: Record<string, string> = {
-    // 缺省 UA 用 Chromium 分区自己的 UA：newservice 按 UA 判定客户端，
-    // 且无感认证的会话与浏览器窗口建立的会话必须同一个 UA。
-    'User-Agent': campusSession().getUserAgent(),
+    // 缺省 UA 与分区一致：统一认证按 UA 绑定 token，不一致会报 827 browser mismatch。
+    'User-Agent': CAMPUS_USER_AGENT,
     ...(init.headers ?? {}),
   };
   const timeoutMs = init.timeoutMs ?? REQUEST_TIMEOUT_MS;

@@ -6,13 +6,14 @@
  * 具体业务结果在 d.errorCode（0 成功）。
  */
 import { BrowserWindow } from 'electron';
-import { CAMPUS_PARTITION, CampusAuthError } from '../campus';
+import { CAMPUS_PARTITION, CAMPUS_USER_AGENT, CampusAuthError } from '../campus';
 import {
   absorbScuCookies,
   cookieNames,
   describeResponse,
   publishScuCookies,
   retryOnAuth,
+  safeUrl,
   scuDebug,
   scuRequest,
   type ScuResponse,
@@ -49,10 +50,16 @@ async function prewarmNewservice(): Promise<void> {
     show: false,
     webPreferences: { partition: CAMPUS_PARTITION },
   });
+  // 页面的 UA 必须与分区/传输层一致，否则统一认证按 UA 绑定会判 browser mismatch。
+  window.webContents.setUserAgent(CAMPUS_USER_AGENT);
   try {
     await window.loadURL(LOGIN);
     // 页面加载后前端还会补几次初始化请求，等它们把会话写全再关窗。
     await new Promise((resolve) => setTimeout(resolve, 1_500));
+    scuDebug(
+      'passpoint',
+      `prewarm ua=${window.webContents.getUserAgent().slice(0, 32)} url=${safeUrl(window.webContents.getURL())}`,
+    );
   } finally {
     window.destroy();
   }

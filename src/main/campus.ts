@@ -14,6 +14,13 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { attachContextMenu } from './ipc';
 
 export const CAMPUS_PARTITION = 'persist:mingyuanhu-campus';
+/**
+ * 校园域统一 UA。统一身份认证会把 token / 会话绑定到签发时的 UA
+ * （不一致时报 827 browser mismatch），而 Electron 默认 UA 里带应用名和版本号，
+ * 每次升级都会变，所以这里固定成一个稳定的浏览器 UA，并让分区与主进程请求共用。
+ */
+export const CAMPUS_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0';
 let ready: Promise<Session> | undefined;
 let persistenceError: Error | undefined;
 
@@ -34,6 +41,8 @@ function cookieKey(cookie: Cookie): string {
 export function getCampusSession(): Promise<Session> {
   ready ??= (async () => {
     const campus = session.fromPartition(CAMPUS_PARTITION);
+    // 固定 UA：统一认证按 UA 绑定 token/会话，Electron 默认 UA 带版本号会导致升级即失效。
+    campus.setUserAgent(CAMPUS_USER_AGENT);
     const cookies = new Map<string, Cookie>();
     for (const cookie of await campus.cookies.get({})) cookies.set(cookieKey(cookie), cookie);
     const path = snapshotPath();
@@ -91,6 +100,20 @@ export async function clearCampusSession(): Promise<void> {
   rmSync(snapshotPath(), { force: true });
   rmSync(`${snapshotPath()}.tmp`, { force: true });
   persistenceError = undefined;
+}
+
+/** 清掉某个校园子域的 cookie：换 UA 或重新登录统一认证时避免复用被 UA 绑定的旧会话。 */
+export async function clearCampusCookiesFor(host: string): Promise<void> {
+  const campus = await getCampusSession();
+  for (const cookie of await campus.cookies.get({})) {
+    const domain = cookie.domain?.replace(/^\./, '') ?? '';
+    if (domain !== host && !domain.endsWith(`.${host}`)) continue;
+    await campus.cookies.remove(
+      `http${cookie.secure ? 's' : ''}://${domain}${cookie.path && cookie.path !== '/' ? cookie.path : '/'}`,
+      cookie.name,
+    );
+  }
+  await flushCampusSession();
 }
 
 export interface CampusRequestOptions {
@@ -217,6 +240,8 @@ export function createCampusLoginWindow(sender: WebContents, title: string): Bro
     },
   });
   attachContextMenu(window.webContents);
+  // 登录窗也必须用固定 UA：统一认证按 UA 绑定会话，Electron 默认 UA 会随版本变化。
+  window.webContents.setUserAgent(CAMPUS_USER_AGENT);
   if (process.platform === 'darwin') {
     window.webContents.on('before-input-event', (event, input) => {
       if (

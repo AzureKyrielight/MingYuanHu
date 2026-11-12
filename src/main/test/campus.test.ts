@@ -34,7 +34,10 @@ vi.mock('electron', () => {
   };
   class MockWindow {
     private readonly emitter = createEmitter();
-    readonly webContents = createEmitter();
+    readonly webContents = Object.assign(createEmitter(), {
+      setUserAgent: vi.fn(),
+      getUserAgent: () => 'test-agent',
+    });
     closeCalled = false;
     minimized = false;
     focus = vi.fn();
@@ -75,6 +78,8 @@ vi.mock('electron', () => {
     session: {
       fromPartition: () => ({
         cookies: { get: async () => [], on: () => {} },
+        setUserAgent: () => {},
+        getUserAgent: () => 'test-agent',
       }),
     },
   };

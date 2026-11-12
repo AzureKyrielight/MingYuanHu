@@ -16,11 +16,13 @@ import type {
 } from '../../shared/scu';
 import {
   CampusAuthError,
+  clearCampusCookiesFor,
   clearCampusSession,
   flushCampusSession,
   openCampusLoginWindow,
 } from '../campus';
 import { fetchCardHistory, fetchUserProfile, identityOf, resetWfw } from './wfw';
+import { resetScuCookies } from './client';
 import { currentPlanCode, fetchCurrentWeek, fetchExams, fetchGrades, fetchSemesters } from './zhjw';
 import {
   fetchBuildings,
@@ -155,7 +157,10 @@ async function result<T>(fn: () => Promise<T>): Promise<ScuResult<T>> {
 export async function connectScu(
   sender: WebContents,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  return openCampusLoginWindow({
+  // 旧的统一认证 cookie 可能绑定在别的 UA 上（历史版本或上次 Electron UA），
+  // 直接复用会让 SSO 入口回 827 browser mismatch，所以先丢掉再走网页登录。
+  await clearCampusCookiesFor('id.scu.edu.cn');
+  const connected = await openCampusLoginWindow({
     sender,
     title: '连接四川大学统一身份认证',
     // 走统一认证 SSO 入口：既能拿到教务 cookie，也能建立 id.scu.edu.cn 会话，
@@ -178,6 +183,9 @@ export async function connectScu(
       await flushCampusSession();
     },
   });
+  // 网页登录在分区里重建了统一认证会话，传输层的 jar 需要重新导入。
+  if (connected.ok) resetScuCookies();
+  return connected;
 }
 
 export async function scuState(): Promise<ScuConnectionState> {

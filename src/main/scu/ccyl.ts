@@ -5,7 +5,7 @@
  * 再用 `loginByUc` 换 CCYL 自己的 token（与 SCU-CLI 的 CcylAuth 一致）。
  * token 只保存在主进程内存，退出或重新登录即失效。
  */
-import { CampusAuthError } from '../campus';
+import { CAMPUS_USER_AGENT, CampusAuthError } from '../campus';
 import { parseJson, describeResponse, scuDebug, scuRequest, type ScuResponse } from './client';
 import { accessToken, bindIdentitySession } from './identity';
 
@@ -20,8 +20,7 @@ const HEADERS = {
   'Content-Type': 'application/json;charset=UTF-8',
   Origin: 'https://dekt.scu.edu.cn',
   Referer: 'https://dekt.scu.edu.cn',
-  'User-Agent':
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+  'User-Agent': CAMPUS_USER_AGENT,
 };
 
 interface CcylState {
