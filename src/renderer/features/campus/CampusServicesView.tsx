@@ -22,7 +22,7 @@ import type {
   ScuCodeName,
   ScuConnectionState,
   ScuExam,
-  ScuIdentityState,
+  ScuCardTransaction,
   ScuNotice,
   ScuNoticeDetail,
   ScuOption,
@@ -171,6 +171,43 @@ function DataTable({ value }: { value: unknown }) {
                   {cellText(row[column])}
                 </td>
               ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** 校园卡交易：服务端字段是英文缩写，表头与金额按用户可读的中文呈现。 */
+function CardTransactionsTable({ rows }: { rows: readonly ScuCardTransaction[] }) {
+  if (rows.length === 0) return <p className="text-xs text-ink-3">暂无交易记录</p>;
+  return (
+    <div className="overflow-auto rounded-lg border border-line">
+      <table className="w-full min-w-max border-collapse text-sm">
+        <thead className="bg-inset text-left text-xs text-ink-3">
+          <tr>
+            <th className="whitespace-nowrap px-3 py-2 font-medium">日期</th>
+            <th className="whitespace-nowrap px-3 py-2 font-medium">时间</th>
+            <th className="whitespace-nowrap px-3 py-2 font-medium">对方</th>
+            <th className="whitespace-nowrap px-3 py-2 text-right font-medium">消费金额</th>
+            <th className="whitespace-nowrap px-3 py-2 text-right font-medium">余额</th>
+            <th className="whitespace-nowrap px-3 py-2 font-medium">类型</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, index) => (
+            <tr key={`${row.jdate}-${row.time}-${index}`} className="border-t border-line/70">
+              <td className="whitespace-nowrap px-3 py-2 text-ink-2">{row.day}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-ink-2">{row.time}</td>
+              <td className="max-w-[18rem] truncate px-3 py-2 text-ink-2">{row.toname || '—'}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-ink-2">
+                ¥{row.xfje.toFixed(2)}
+              </td>
+              <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-ink-2">
+                ¥{row.syje.toFixed(2)}
+              </td>
+              <td className="whitespace-nowrap px-3 py-2 text-ink-2">{row.type || '—'}</td>
             </tr>
           ))}
         </tbody>
@@ -702,7 +739,7 @@ function CardPanel() {
               </span>
             )}
           </div>
-          <DataTable value={result.data.transactions} />
+          <CardTransactionsTable rows={result.data.transactions} />
         </>
       )}
     </Panel>
@@ -2208,60 +2245,22 @@ export function CampusServicesView() {
 function DesktopCampusServices() {
   const [tab, setTab] = useState<TabId>('grades');
   const [state, setState] = useState<ScuConnectionState | null>(null);
-  const [identity, setIdentity] = useState<ScuIdentityState | null>(null);
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [tokenBusy, setTokenBusy] = useState(false);
-  const [tokenError, setTokenError] = useState<string | null>(null);
 
   const refreshState = useCallback(async () => {
     if (!window.dela) return;
     setState(await window.dela.scu.state());
   }, []);
 
-  const refreshIdentity = useCallback(async () => {
-    if (!window.dela) return;
-    setIdentity(await window.dela.scu.identityState());
-  }, []);
-
   useEffect(() => {
     void refreshState();
-    void refreshIdentity();
-  }, [refreshState, refreshIdentity]);
+  }, [refreshState]);
 
   // 校园登录入口在左下角侧栏：切回本页时刷新状态。
   useEffect(() => {
-    const refresh = () => {
-      void refreshState();
-      void refreshIdentity();
-    };
+    const refresh = () => void refreshState();
     window.addEventListener('focus', refresh);
     return () => window.removeEventListener('focus', refresh);
-  }, [refreshState, refreshIdentity]);
-
-  const loginToken = async () => {
-    if (!window.dela) return;
-    setTokenError(null);
-    setTokenBusy(true);
-    try {
-      const result = await window.dela.scu.identityLoginAuto({
-        username: username.trim(),
-        password,
-      });
-      setIdentity(result);
-      setPassword('');
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setTokenError(message.replace(/^Error invoking remote method '[^']+': Error: /, '').trim());
-    } finally {
-      setTokenBusy(false);
-    }
-  };
-
-  const logoutToken = async () => {
-    if (!window.dela) return;
-    setIdentity(await window.dela.scu.identityLogout());
-  };
+  }, [refreshState]);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-auto p-5">
@@ -2286,62 +2285,6 @@ function DesktopCampusServices() {
           )}
         </div>
       </header>
-
-      <section className="rounded-lg border border-line bg-surface px-4 py-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-sm font-medium text-ink">统一认证密码登录</p>
-            <p className="mt-0.5 text-xs text-ink-3">
-              学号 + 密码换取访问令牌，验证码由本地 OCR
-              识别；密码只在本次登录使用，不写入磁盘与日志。
-            </p>
-          </div>
-          {identity?.connected ? (
-            <div className="flex items-center gap-3 text-xs text-ink-3">
-              <span className="text-ink-2">
-                已登录{identity.principal ? ` · ${identity.principal}` : ''}
-                {identity.expiresAt
-                  ? ` · 有效至 ${new Date(identity.expiresAt).toLocaleTimeString()}`
-                  : ''}
-              </span>
-              <Button size="sm" variant="ghost" onClick={() => void logoutToken()}>
-                退出
-              </Button>
-            </div>
-          ) : (
-            <div className="flex flex-1 flex-wrap items-center justify-end gap-2">
-              <Input
-                className="w-40"
-                placeholder="学号"
-                value={username}
-                onChange={(event) => setUsername(event.target.value)}
-              />
-              <Input
-                className="w-44"
-                type="password"
-                placeholder="统一认证密码"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !tokenBusy) void loginToken();
-                }}
-              />
-              <Button
-                size="sm"
-                disabled={tokenBusy || !username.trim() || !password}
-                onClick={() => void loginToken()}
-              >
-                {tokenBusy ? '登录中…' : '密码登录'}
-              </Button>
-            </div>
-          )}
-        </div>
-        {tokenError && (
-          <p className="mt-2 text-xs text-red" role="alert">
-            {tokenError}
-          </p>
-        )}
-      </section>
 
       <div className="grid min-h-0 gap-4 lg:grid-cols-[12rem_minmax(0,1fr)]">
         <nav
