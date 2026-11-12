@@ -6,7 +6,7 @@
  * token 只保存在主进程内存，退出或重新登录即失效。
  */
 import { CampusAuthError } from '../campus';
-import { parseJson, scuRequest, type ScuResponse } from './client';
+import { parseJson, describeResponse, scuDebug, scuRequest, type ScuResponse } from './client';
 import { accessToken, bindIdentitySession } from './identity';
 
 const CCYL_BASE = 'https://dekt.scu.edu.cn/ccyl-api';
@@ -97,6 +97,10 @@ async function requestToken(): Promise<string> {
     }
   })();
   const code = codeFromUrl || codeFromBody;
+  scuDebug(
+    'ccyl',
+    `sp_logged ${describeResponse(redirect)} codeUrl=${codeFromUrl !== ''} codeBody=${codeFromBody !== ''}`,
+  );
   if (!code) throw new CampusAuthError('第二课堂授权未获得 code，请重新登录统一身份认证');
 
   const login = await scuRequest(`${CCYL_BASE}/app/auth/loginByUc`, {

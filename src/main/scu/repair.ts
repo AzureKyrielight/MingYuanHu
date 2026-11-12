@@ -12,8 +12,8 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { basename } from 'node:path';
 import { CampusAuthError } from '../campus';
-import { scuRequest, type ScuResponse } from './client';
-import { accessToken, bindIdentitySession } from './identity';
+import { describeResponse, scuDebug, scuRequest, type ScuResponse } from './client';
+import { bindIdentitySession, ssoAuthorization } from './identity';
 import { buildMultipart, contentTypeFor } from './multipart';
 
 const BASE = 'https://zhhq.scu.edu.cn/api';
@@ -113,13 +113,12 @@ function decodeEnvelope(body: string, status: number, service = '报修'): ZhhqE
 /** 静默登录：jwt31 回跳 → userinfo → login/auto → tokenKey。 */
 async function login(): Promise<string> {
   await bindIdentitySession();
-  const bearer = accessToken();
-  if (!bearer) throw new CampusAuthError('请先用统一身份认证登录');
   const redirect = await scuRequest(CAS_URL, {
     headers: {
       Accept: 'text/html,application/xhtml+xml,*/*',
       'User-Agent':
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+      ...ssoAuthorization(),
     },
     timeoutMs: 30_000,
   });
@@ -131,6 +130,7 @@ async function login(): Promise<string> {
   } catch {
     userinfo = '';
   }
+  scuDebug('repair', `jwt31 ${describeResponse(redirect)} hasUserinfo=${userinfo !== ''}`);
   if (!userinfo) throw new CampusAuthError('智慧后勤认证回跳缺少 userinfo');
 
   const form = new URLSearchParams({

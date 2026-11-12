@@ -6,7 +6,15 @@
  * 具体业务结果在 d.errorCode（0 成功）。
  */
 import { CampusAuthError } from '../campus';
-import { bootstrapSso, scuRequest, type ScuResponse } from './client';
+import {
+  bootstrapSso,
+  cookieNames,
+  describeResponse,
+  retryOnAuth,
+  scuDebug,
+  scuRequest,
+  type ScuResponse,
+} from './client';
 import { bindIdentitySession } from './identity';
 
 const BASE = 'https://service.scu.edu.cn/newservice';
@@ -31,8 +39,19 @@ export function resetPasspoint(): void {
 
 async function ensurePasspoint(): Promise<void> {
   if (ready) return;
-  await bindIdentitySession();
+  const bound = await bindIdentitySession();
+  scuDebug(
+    'passpoint',
+    `bind=${bound ? 'ok' : 'no-token'} idCookies=${await cookieNames('id.scu.edu.cn')} svcCookies=${await cookieNames('service.scu.edu.cn')}`,
+  );
+  // 浏览器是先打开 m_passpoint 页面再走中继，页面首访会下发 newservice 自己的会话 cookie；
+  // 缺了它业务接口一律回 UN_AUTH。
+  await scuRequest(`${BASE}/fe/site/m_passpoint`, {
+    headers: { Accept: 'text/html,application/xhtml+xml,*/*' },
+    timeoutMs: 20_000,
+  });
   await bootstrapSso(LOGIN, '校园网服务');
+  scuDebug('passpoint', `relayed svcCookies=${await cookieNames('service.scu.edu.cn')}`);
   ready = true;
 }
 
@@ -44,11 +63,15 @@ const textOf = (value: unknown): string =>
 
 /** 解析 newservice 信封并校验 d.errorCode（0 成功）。 */
 export function decodePasspointBody(body: string, status: number): Record<string, unknown> {
-  if (status === 302 || status === 401 || status === 403 || !body.trim())
+  const trimmed = body.trim();
+  if (status === 302 || status === 401 || status === 403 || !trimmed)
+    throw new CampusAuthError('校园网服务登录已失效');
+  // 会话过期但 HTTP 200 时可能直接返回登录页 HTML（与 SCU-CLI 的强特征检测一致）。
+  if (trimmed.startsWith('<') && /login|统一身份认证/.test(trimmed.slice(0, 4096)))
     throw new CampusAuthError('校园网服务登录已失效');
   let parsed: unknown;
   try {
-    parsed = JSON.parse(body) as unknown;
+    parsed = JSON.parse(trimmed) as unknown;
   } catch {
     throw new Error('校园网服务返回了无法识别的数据');
   }
@@ -64,20 +87,24 @@ export function decodePasspointBody(body: string, status: number): Record<string
   return data;
 }
 
+/** 业务请求；会话失效（e=UN_AUTH）时重建中继并重放一次，对齐 SCU-CLI 的 RetryOnUnauthenticated。 */
 async function request(path: string, init: { method?: 'GET' | 'POST'; body?: string } = {}) {
-  await ensurePasspoint();
-  const response: ScuResponse = await scuRequest(`${BASE}${path}`, {
-    method: init.method ?? 'GET',
-    headers: {
-      ...HEADERS,
-      ...(init.body === undefined
-        ? {}
-        : { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' }),
-    },
-    ...(init.body === undefined ? {} : { body: init.body }),
-    timeoutMs: 25_000,
-  });
-  return decodePasspointBody(response.body, response.status);
+  return retryOnAuth(async () => {
+    await ensurePasspoint();
+    const response: ScuResponse = await scuRequest(`${BASE}${path}`, {
+      method: init.method ?? 'GET',
+      headers: {
+        ...HEADERS,
+        ...(init.body === undefined
+          ? {}
+          : { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' }),
+      },
+      ...(init.body === undefined ? {} : { body: init.body }),
+      timeoutMs: 25_000,
+    });
+    scuDebug('passpoint', `req ${path} ${describeResponse(response)}`);
+    return decodePasspointBody(response.body, response.status);
+  }, resetPasspoint);
 }
 
 export interface PasspointDevice {

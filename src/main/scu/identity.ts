@@ -1,8 +1,12 @@
 /** 统一身份认证（id.scu.edu.cn）password 授权：换取 Bearer token。
- *  密码只在本次调用内使用，不写入磁盘、不进入日志；token 仅保存在主进程内存，退出即失效。 */
+ *  密码只在本次调用内使用，不写入磁盘、不进入日志；token 用 safeStorage 加密
+ *  持久化到本机（跟随服务端 session 的 1 小时 TTL），重启后无需重新登录。 */
+import { app, safeStorage } from 'electron';
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { sm2 } from 'sm-crypto';
 import { CampusAuthError } from '../campus';
-import { scuRequest } from './client';
+import { dropScuCookies, scuRequest, setSsoAuthHeadersProvider } from './client';
 import { recognizeCaptchaBase64 } from './ocr/captcha';
 
 const ID_BASE = 'https://id.scu.edu.cn';
@@ -35,9 +39,62 @@ interface TokenSession {
 let session: TokenSession | null = null;
 /** 已用 token 建立过 id.scu.edu.cn cookie session 的账号；换账号或退出时清空。 */
 let boundPrincipal: string | null = null;
+/** 懒恢复标记：首次访问时才从磁盘解密，避免在 app ready 前触碰 userData。 */
+let restored = false;
+
+function snapshotPath(): string {
+  return join(app.getPath('userData'), 'scu-identity.bin');
+}
+
+function loadSession(): TokenSession | null {
+  const path = snapshotPath();
+  try {
+    if (!existsSync(path) || !safeStorage.isEncryptionAvailable()) return null;
+    const parsed = JSON.parse(
+      safeStorage.decryptString(readFileSync(path)),
+    ) as Partial<TokenSession>;
+    if (
+      typeof parsed?.token === 'string' &&
+      typeof parsed?.principal === 'string' &&
+      typeof parsed?.loginAt === 'number'
+    )
+      return { token: parsed.token, principal: parsed.principal, loginAt: parsed.loginAt };
+  } catch {
+    // 解密失败/损坏：视为无 token，下次密码登录会重建。
+  }
+  return null;
+}
+
+function saveSession(): void {
+  const path = snapshotPath();
+  try {
+    if (!session) {
+      rmSync(path, { force: true });
+      return;
+    }
+    if (!safeStorage.isEncryptionAvailable()) return;
+    const tmp = `${path}.tmp`;
+    writeFileSync(tmp, safeStorage.encryptString(JSON.stringify(session)));
+    renameSync(tmp, path);
+  } catch {
+    // 持久化失败不阻断登录；下次登录再尝试。
+  }
+}
+
+function ensureRestored(): void {
+  if (restored) return;
+  restored = true;
+  if (!session) session = loadSession();
+}
+
+/** 内存态是否在 1 小时 TTL 内（不含过期判断）。 */
+function tokenAlive(): boolean {
+  ensureRestored();
+  return session !== null && Date.now() - session.loginAt < TOKEN_TTL_MS;
+}
 
 export function identityState(): ScuIdentityState {
-  const alive = session !== null && Date.now() - session.loginAt < TOKEN_TTL_MS;
+  const alive = tokenAlive();
   return {
     connected: alive,
     principal: alive ? session!.principal : null,
@@ -48,15 +105,25 @@ export function identityState(): ScuIdentityState {
 export function clearIdentity(): void {
   session = null;
   boundPrincipal = null;
+  saveSession();
 }
 
-/** 供需要 Bearer 的子系统使用；token 失效时抛出可引导重新登录的错误。 */
+/** 供需要 Bearer 的子系统使用；未登录与 token 过期分开提示。 */
 export function accessToken(): string {
-  if (!session || Date.now() - session.loginAt >= TOKEN_TTL_MS) {
-    throw new CampusAuthError('统一认证 token 已失效，请重新登录');
-  }
+  ensureRestored();
+  if (!session) throw new CampusAuthError('请先在校园服务页完成统一认证密码登录');
+  if (Date.now() - session.loginAt >= TOKEN_TTL_MS)
+    throw new CampusAuthError('统一认证 token 已过期，请重新登录');
   return session.token;
 }
+
+/** SSO 中继授权头：token 存在返回 Bearer 头，否则返回空（走纯 cookie 兜底）。 */
+export function ssoAuthorization(): Record<string, string> {
+  if (!tokenAlive()) return {};
+  return { Authorization: `Bearer ${session!.token}` };
+}
+
+setSsoAuthHeadersProvider(ssoAuthorization);
 
 export function authorizationHeaders(): Record<string, string> {
   return { Authorization: `Bearer ${accessToken()}` };
@@ -71,6 +138,9 @@ export function authorizationHeaders(): Record<string, string> {
 export async function bindIdentitySession(): Promise<boolean> {
   if (!session || Date.now() - session.loginAt >= TOKEN_TTL_MS) return false;
   if (boundPrincipal === session.principal) return true;
+  // 丢掉旧的统一认证会话（可能来自上一次登录或网页登录窗口的残留 CASTGC），
+  // 否则 CAS 会拿脏票据直接回 401。
+  await dropScuCookies('id.scu.edu.cn');
   const response = await scuRequest(`${ID_BASE}/api/bff/v1.2/commons/session/save`, {
     method: 'POST',
     headers: { ...ID_HEADERS, ...authorizationHeaders() },
@@ -205,6 +275,7 @@ export async function loginWithPassword(input: {
   const token = typeof result.data?.access_token === 'string' ? result.data.access_token : '';
   if (!token) throw new Error('登录响应缺少 token');
   session = { token, principal: username, loginAt: Date.now() };
+  saveSession();
   return identityState();
 }
 
