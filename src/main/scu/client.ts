@@ -12,9 +12,6 @@ import { CookieJar, seedCookie } from './cookie-jar';
 const REQUEST_TIMEOUT_MS = 20_000;
 const MAX_REDIRECTS = 10;
 const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
-/** 缺省 UA：newservice 等分支按 UA 判定客户端，缺省会直接报 CODE_ERROR。 */
-const DEFAULT_USER_AGENT =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0';
 
 /** 主进程诊断日志：SCU_DEBUG=1 时打印；只输出脱敏信息（域名/路径/布尔），不输出票据。 */
 export function scuDebug(label: string, detail: string): void {
@@ -60,13 +57,20 @@ function campusSession() {
 
 async function cookieJar(): Promise<CookieJar> {
   if (jar) return jar;
-  const stored = await campusSession().cookies.get({ domain: 'scu.edu.cn' });
+  const stored = await campusCookies();
   jar = new CookieJar(
-    stored
-      .filter((cookie) => cookie.domain)
-      .map((cookie) => seedCookie({ ...cookie, domain: cookie.domain ?? '' })),
+    stored.map((cookie) => seedCookie({ ...cookie, domain: cookie.domain ?? '' })),
   );
   return jar;
+}
+
+/**
+ * 分区里属于校园域的 cookie。
+ * `cookies.get({ domain })` 只按同名域过滤、不含子域，因此必须自己筛。
+ */
+async function campusCookies(): Promise<Electron.Cookie[]> {
+  const all = await campusSession().cookies.get({});
+  return all.filter((cookie) => (cookie.domain ?? '').replace(/^\./, '').endsWith('scu.edu.cn'));
 }
 
 /** 退出登录或重新连接统一认证时丢弃 jar，下次请求重新从分区导入。 */
@@ -78,6 +82,44 @@ export function resetScuCookies(): void {
 export async function dropScuCookies(domain: string): Promise<void> {
   const cookies = await cookieJar();
   cookies.drop((cookie) => cookie.domain === domain || cookie.domain.endsWith(`.${domain}`));
+}
+
+/** 把 jar 里某域名的 cookie 写进校园分区，供需要真实浏览器会话的流程（隐藏窗口）使用。 */
+export async function publishScuCookies(host: string): Promise<number> {
+  const cookies = await cookieJar();
+  const target = campusSession().cookies;
+  let published = 0;
+  for (const cookie of cookies.list()) {
+    if (!(cookie.domain === host || host.endsWith(`.${cookie.domain}`))) continue;
+    const url = `https://${cookie.domain}${cookie.path}`;
+    await target.set({
+      url,
+      name: cookie.name,
+      value: cookie.value,
+      domain: cookie.domain,
+      path: cookie.path,
+      secure: cookie.secure,
+      ...(cookie.expiresAt ? { expirationDate: cookie.expiresAt / 1000 } : {}),
+    });
+    published += 1;
+  }
+  return published;
+}
+
+/** 把校园分区里的 cookie 合回 jar：浏览器窗口建立的会话需要回流给 Node 传输层。 */
+export async function absorbScuCookies(host: string): Promise<number> {
+  const cookies = await cookieJar();
+  const stored = await campusCookies();
+  let absorbed = 0;
+  for (const cookie of stored) {
+    if (!cookie.domain) continue;
+    const domain = cookie.domain.replace(/^\./, '');
+    const related = host === domain || host.endsWith(`.${domain}`) || domain.endsWith(`.${host}`);
+    if (!related) continue;
+    cookies.upsert(seedCookie({ ...cookie, domain: cookie.domain }));
+    absorbed += 1;
+  }
+  return absorbed;
 }
 
 /** 川大域名（含所有子站）判断；登录页与子系统跳转都带这个后缀。 */
@@ -161,7 +203,9 @@ function resolveLocation(location: string, base: string): string {
 export async function scuRequest(url: string, init: ScuRequestInit = {}): Promise<ScuResponse> {
   const cookies = await cookieJar();
   const headers: Record<string, string> = {
-    'User-Agent': DEFAULT_USER_AGENT,
+    // 缺省 UA 用 Chromium 分区自己的 UA：newservice 按 UA 判定客户端，
+    // 且无感认证的会话与浏览器窗口建立的会话必须同一个 UA。
+    'User-Agent': campusSession().getUserAgent(),
     ...(init.headers ?? {}),
   };
   const timeoutMs = init.timeoutMs ?? REQUEST_TIMEOUT_MS;
@@ -236,6 +280,32 @@ export async function scuRequest(url: string, init: ScuRequestInit = {}): Promis
     current = next;
   }
   throw new Error(`校园服务跳转超过 ${MAX_REDIRECTS} 次`);
+}
+
+/**
+ * 用 Chromium 网络栈发一次请求（分区 cookie 自动携带）。
+ * 仅限服务端按客户端指纹判定会话的场景（newservice 的无感认证业务接口）：
+ * 同一个 cookie、同一个 UA，Node 传输层会被判 UN_AUTH，Chromium 才能通过。
+ */
+export async function browserRequest(url: string, init: ScuRequestInit = {}): Promise<ScuResponse> {
+  const response = await campusSession().fetch(url, {
+    method: init.method ?? 'GET',
+    headers: init.headers,
+    body: init.body,
+    credentials: 'include',
+    redirect: 'follow',
+  });
+  const body = await response.text();
+  const result: ScuResponse = {
+    url: response.url || url,
+    status: response.status,
+    body,
+    contentType: response.headers.get('content-type') ?? '',
+  };
+  if (response.status === 401 || response.status === 403) {
+    throw new CampusAuthError('校园登录已失效，请重新连接四川大学统一身份认证');
+  }
+  return result;
 }
 
 export function assertAuthenticated(response: ScuResponse, service: string): void {

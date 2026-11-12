@@ -5,11 +5,13 @@
  * 成功后会话里带 process_uid。响应信封 e==="OK" 表示成功，
  * 具体业务结果在 d.errorCode（0 成功）。
  */
-import { CampusAuthError } from '../campus';
+import { BrowserWindow } from 'electron';
+import { CAMPUS_PARTITION, CampusAuthError } from '../campus';
 import {
-  bootstrapSso,
+  absorbScuCookies,
   cookieNames,
   describeResponse,
+  publishScuCookies,
   retryOnAuth,
   scuDebug,
   scuRequest,
@@ -27,14 +29,35 @@ const HEADERS = {
   'X-Requested-With': 'XMLHttpRequest',
   Origin: 'https://service.scu.edu.cn',
   Referer: `${BASE}/fe/site/m_passpoint`,
-  'User-Agent':
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
 };
 
 let ready = false;
 
 export function resetPasspoint(): void {
   ready = false;
+}
+
+/**
+ * 无感认证的会话必须由浏览器建立：newservice 的业务接口只认「页面导航 + 前端初始化
+ * 请求」产生的 process_uid 会话，纯 HTTP 中继拿到的 cookie 一律被判 UN_AUTH。
+ * 这里用一个隐藏窗口走真实导航，随后把分区 cookie 回流给传输层。
+ */
+async function prewarmNewservice(): Promise<void> {
+  // 隐藏窗口没有我们 jar 里的统一认证会话，先把 id 域 cookie 推进分区。
+  const published = await publishScuCookies('id.scu.edu.cn');
+  const window = new BrowserWindow({
+    show: false,
+    webPreferences: { partition: CAMPUS_PARTITION },
+  });
+  try {
+    await window.loadURL(LOGIN);
+    // 页面加载后前端还会补几次初始化请求，等它们把会话写全再关窗。
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+  } finally {
+    window.destroy();
+  }
+  const absorbed = await absorbScuCookies('service.scu.edu.cn');
+  scuDebug('passpoint', `prewarm published=${published} absorbed=${absorbed}`);
 }
 
 async function ensurePasspoint(): Promise<void> {
@@ -44,14 +67,10 @@ async function ensurePasspoint(): Promise<void> {
     'passpoint',
     `bind=${bound ? 'ok' : 'no-token'} idCookies=${await cookieNames('id.scu.edu.cn')} svcCookies=${await cookieNames('service.scu.edu.cn')}`,
   );
-  // 浏览器是先打开 m_passpoint 页面再走中继，页面首访会下发 newservice 自己的会话 cookie；
-  // 缺了它业务接口一律回 UN_AUTH。
-  await scuRequest(`${BASE}/fe/site/m_passpoint`, {
-    headers: { Accept: 'text/html,application/xhtml+xml,*/*' },
-    timeoutMs: 20_000,
-  });
-  await bootstrapSso(LOGIN, '校园网服务');
-  scuDebug('passpoint', `relayed svcCookies=${await cookieNames('service.scu.edu.cn')}`);
+  // 隐藏窗口导航同时完成中继与前端初始化；随后不要再走 HTTP 中继，
+  // 否则新的 login/cas 命中会把这个已认证会话重置掉。
+  await prewarmNewservice();
+  scuDebug('passpoint', `prewarmed svcCookies=${await cookieNames('service.scu.edu.cn')}`);
   ready = true;
 }
 
@@ -87,7 +106,8 @@ export function decodePasspointBody(body: string, status: number): Record<string
   return data;
 }
 
-/** 业务请求；会话失效（e=UN_AUTH）时重建中继并重放一次，对齐 SCU-CLI 的 RetryOnUnauthenticated。 */
+/** 业务请求；会话失效（e=UN_AUTH）时重建中继并重放一次，对齐 SCU-CLI 的 RetryOnUnauthenticated。
+ *  会话由隐藏窗口导航建立后回流到 jar，所以业务请求仍走统一传输层。 */
 async function request(path: string, init: { method?: 'GET' | 'POST'; body?: string } = {}) {
   return retryOnAuth(async () => {
     await ensurePasspoint();

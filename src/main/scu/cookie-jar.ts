@@ -137,4 +137,15 @@ export class CookieJar {
   drop(predicate: (cookie: JarCookie) => boolean): void {
     this.cookies = this.cookies.filter((cookie) => !predicate(cookie));
   }
+
+  /** 写入或覆盖一条 cookie（同名同域同路径替换）。 */
+  upsert(cookie: JarCookie): void {
+    if (cookie.expiresAt !== 0 && cookie.expiresAt <= Date.now()) return;
+    const index = this.cookies.findIndex(
+      (item) =>
+        item.name === cookie.name && item.domain === cookie.domain && item.path === cookie.path,
+    );
+    if (index >= 0) this.cookies.splice(index, 1, cookie);
+    else this.cookies.push(cookie);
+  }
 }
