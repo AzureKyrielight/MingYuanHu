@@ -11,7 +11,7 @@ import {
   identityState,
   loginWithPasswordAuto,
 } from '../src/main/scu/identity';
-import { searchCcylActivities } from '../src/main/scu/ccyl';
+import { searchCcylActivities, signUpCcylActivity, cancelCcylSignUp } from '../src/main/scu/ccyl';
 import { fetchRepairAddresses, fetchRepairAreaTree } from '../src/main/scu/repair';
 import { fetchPasspointDevices, fetchPasspointUser } from '../src/main/scu/passpoint';
 import { fetchCloudPrintStatus } from '../src/main/scu/cloudprint';
@@ -20,6 +20,8 @@ import { fetchFitnessNotices } from '../src/main/scu/fitness';
 import { fetchCampus as fetchPayAppCampus } from '../src/main/scu/payapp';
 
 app.setPath('userData', join(process.env.APPDATA ?? '', 'mingyuanhu'));
+// 无感认证会用隐藏窗口预热，窗口销毁不能把探针进程一起带走。
+app.on('window-all-closed', () => {});
 
 async function ensureLogin(): Promise<void> {
   if (identityState().connected) return;
@@ -65,6 +67,27 @@ app
     await step('fitness.notices', () => fetchFitnessNotices());
     await step('payapp.campus', async () => (await fetchPayAppCampus()).length);
     console.log(`PROBE cookies id=${await cookieNames('id.scu.edu.cn')}`);
+
+    // 可逆写操作冒烟：第二课堂报名 → 立即取消。默认只看候选，确认后才真正提交。
+    if (process.env.SCU_WRITE_SMOKE) {
+      await step('ccyl.candidates', async () => {
+        const rows = await searchCcylActivities({ pageSize: 5 });
+        for (const row of rows.slice(0, 5)) {
+          console.log(`PROBE candidate ${JSON.stringify(row).slice(0, 300)}`);
+        }
+        return rows.length;
+      });
+      const target = process.env.SCU_CCYL_ACTIVITY_ID;
+      if (target) {
+        await step('ccyl.signup', async () => {
+          const result = await signUpCcylActivity(target, process.env.SCU_CCYL_SCORE_TYPE ?? '');
+          console.log(`PROBE signup ${JSON.stringify(result)}`);
+          const cancelled = await cancelCcylSignUp(target);
+          console.log(`PROBE cancel ${JSON.stringify(cancelled)}`);
+          return 'signed-up-and-cancelled';
+        });
+      }
+    }
     app.exit(0);
   })
   .catch((error: unknown) => {
