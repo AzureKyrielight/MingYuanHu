@@ -51,6 +51,7 @@ import {
 import { dialogOverlay, dialogPanel, drawerFromLeft, fadeIn, overlayFade } from './ui/motion';
 import { chromeIconButton, navIcon, navRow } from '../navigation/nav-styles';
 import { UpdateBadge } from '../features/settings/UpdateBadge';
+import { CampusLoginDialog } from '../features/campus/CampusLoginDialog';
 import { useVisibleNavEntries } from '../navigation/entries';
 
 /** 侧栏文字随折叠状态淡入/淡出,与宽度过渡同步(参照 Chrome 垂直标签页)。 */
@@ -218,6 +219,7 @@ export function AppShell({
   const [narrow, setNarrow] = useState(() => window.matchMedia('(max-width: 767px)').matches);
   const drawer = mobileDrawer ?? null;
   const [helpOpen, setHelpOpen] = useState(false);
+  const [campusLoginOpen, setCampusLoginOpen] = useState(false);
   const [projectOpenTarget, setProjectOpenTarget] = useState<'vscode' | 'explorer'>(() => {
     try {
       return localStorage.getItem('dela.project.open-target') === 'explorer'
@@ -614,7 +616,13 @@ export function AppShell({
           <WindowControls />
         </div>
       </header>
+      <CampusLoginDialog
+        onConnected={() => navigate('campus')}
+        onOpenChange={setCampusLoginOpen}
+        open={campusLoginOpen}
+      />
       <Dialog.Root onOpenChange={setHelpOpen} open={helpOpen}>
+        {' '}
         <Dialog.Portal>
           <Dialog.Overlay className={dialogOverlay} />
           <Dialog.Content
@@ -794,11 +802,8 @@ export function AppShell({
           <div className="grid shrink-0 gap-0.5 pt-2">
             <button
               className={navRow(false)}
-              onClick={() => {
-                navigate('campus');
-                void window.dela?.scu.connect();
-              }}
-              title="连接或重新登录四川大学统一身份认证"
+              onClick={() => setCampusLoginOpen(true)}
+              title="登录或重新登录四川大学统一身份认证"
               type="button"
             >
               <PlugZap className={navIcon(false)} strokeWidth={1.8} />
