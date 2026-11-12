@@ -7,9 +7,13 @@ import {
   FileText,
   GraduationCap,
   ListTree,
+  LoaderCircle,
   Megaphone,
   PlugZap,
   Printer,
+  Trophy,
+  Wifi,
+  Wrench,
   RefreshCw,
   Table2,
   Wallet,
@@ -25,6 +29,7 @@ import type {
   ScuOption,
   ScuResult,
 } from '../../../shared/api';
+import type { ScuCloudPrintOptions } from '../../../shared/scu';
 import {
   CLASSROOM_PERIODS,
   CLASSROOM_STATUS_LABELS,
@@ -62,6 +67,7 @@ import { Button } from '../../components/ui/button';
 import { DesktopOnlyNotice } from '../../components/ui/desktop-only-notice';
 import { Input } from '../../components/ui/input';
 import { cn } from '../../lib/utils';
+import { CcylPanel, PasspointPanel, RepairPanel, ServiceStartCard } from './campus-extra-panels';
 
 type TabId =
   | 'grades'
@@ -70,6 +76,9 @@ type TabId =
   | 'fitness'
   | 'card'
   | 'service'
+  | 'ccyl'
+  | 'repair'
+  | 'net'
   | 'print'
   | 'classroom'
   | 'program'
@@ -83,6 +92,9 @@ const tabs: readonly { id: TabId; label: string; icon: typeof BookOpen }[] = [
   { id: 'fitness', label: '体测', icon: GraduationCap },
   { id: 'card', label: '校园卡', icon: CreditCard },
   { id: 'service', label: '办事大厅', icon: FileText },
+  { id: 'ccyl', label: '第二课堂', icon: Trophy },
+  { id: 'repair', label: '在线报修', icon: Wrench },
+  { id: 'net', label: '无感认证', icon: Wifi },
   { id: 'classroom', label: '空闲教室', icon: DoorOpen },
   { id: 'program', label: '培养方案', icon: ListTree },
   { id: 'schedule', label: '课表查询', icon: Table2 },
@@ -758,6 +770,15 @@ function CloudPrintPanel() {
   const [status, setStatus] = useState<ScuResult<{ ready: boolean }> | null>(null);
   const [jobs, setJobs] = useState<ScuResult<readonly unknown[]> | null>(null);
   const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadNotice, setUploadNotice] = useState<string | null>(null);
+  const [options, setOptions] = useState<ScuCloudPrintOptions>({
+    color: 'bw',
+    paper: 'a4',
+    duplex: 'simplex',
+    copies: 1,
+    pages: 'all',
+  });
 
   const load = useCallback(async () => {
     if (!window.dela) return;
@@ -798,8 +819,84 @@ function CloudPrintPanel() {
       }
     >
       <p className="text-xs text-ink-3">
-        只读：检查云打印会话并列出任务，不会创建或重发打印任务。上传功能稍后接入。
+        上传文件后到馆内终端刷校园卡打印；上传失败时不要直接重传，先到任务列表核对。
       </p>
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-inset/40 p-2">
+        <select
+          className="h-8 rounded-md border border-line bg-surface px-2 text-xs text-ink"
+          onChange={(event) =>
+            setOptions((current) => ({ ...current, color: event.target.value as 'bw' | 'color' }))
+          }
+          value={options.color}
+        >
+          <option value="bw">黑白</option>
+          <option value="color">彩色</option>
+        </select>
+        <select
+          className="h-8 rounded-md border border-line bg-surface px-2 text-xs text-ink"
+          onChange={(event) =>
+            setOptions((current) => ({
+              ...current,
+              paper: event.target.value as ScuCloudPrintOptions['paper'],
+            }))
+          }
+          value={options.paper}
+        >
+          <option value="a4">A4</option>
+          <option value="a3">A3</option>
+          <option value="original">原稿</option>
+        </select>
+        <select
+          className="h-8 rounded-md border border-line bg-surface px-2 text-xs text-ink"
+          onChange={(event) =>
+            setOptions((current) => ({
+              ...current,
+              duplex: event.target.value as ScuCloudPrintOptions['duplex'],
+            }))
+          }
+          value={options.duplex}
+        >
+          <option value="simplex">单面</option>
+          <option value="long-edge">双面·长边</option>
+          <option value="short-edge">双面·短边</option>
+        </select>
+        <Input
+          className="h-8 w-20 text-xs"
+          min="1"
+          onChange={(event) =>
+            setOptions((current) => ({ ...current, copies: Number(event.target.value) || 1 }))
+          }
+          type="number"
+          value={options.copies}
+        />
+        <Input
+          className="h-8 w-24 text-xs"
+          onChange={(event) => setOptions((current) => ({ ...current, pages: event.target.value }))}
+          placeholder="all 或 2-5"
+          value={options.pages}
+        />
+        <Button
+          disabled={uploading || busy}
+          onClick={async () => {
+            setUploading(true);
+            setUploadNotice(null);
+            const result = await window.dela!.scu.cloudPrintUpload(options);
+            setUploading(false);
+            if (!result.ok) {
+              setUploadNotice(result.error);
+              return;
+            }
+            const payload = result.data as { message?: string; warning?: string };
+            setUploadNotice([payload.message, payload.warning].filter(Boolean).join('；'));
+            void load();
+          }}
+          size="sm"
+        >
+          {uploading ? <LoaderCircle className="animate-spin" /> : <Printer />}
+          选择文件并上传
+        </Button>
+      </div>
+      {uploadNotice ? <p className="text-xs text-ink-3">{uploadNotice}</p> : null}
       {status && !status.ok && <ErrorText result={status} />}
       {status?.ok && <p className="text-sm text-ink-2">会话已建立 · 共 {rows.length} 条任务</p>}
       {jobs && !jobs.ok && <ErrorText result={jobs} />}
@@ -2237,6 +2334,10 @@ function DesktopCampusServices() {
         {tab === 'fitness' && <FitnessPanel />}
         {tab === 'card' && <CardPanel />}
         {tab === 'service' && <ServicePanel />}
+        {tab === 'service' && <ServiceStartCard />}
+        {tab === 'ccyl' && <CcylPanel />}
+        {tab === 'repair' && <RepairPanel />}
+        {tab === 'net' && <PasspointPanel />}
         {tab === 'classroom' && <ClassroomPanel />}
         {tab === 'program' && <ProgramPanel />}
         {tab === 'schedule' && <ScheduleInquiryPanel />}

@@ -59,8 +59,57 @@ import {
   type ScuOption,
   type ScuPlanCompletion,
 } from './zhjw-extras';
-import { fetchCloudPrintJobs, fetchCloudPrintStatus, resetCloudPrint } from './cloudprint';
+import {
+  fetchCloudPrintJobs,
+  fetchCloudPrintStatus,
+  resetCloudPrint,
+  uploadCloudPrint,
+} from './cloudprint';
 import { fetchJwcNotice, fetchJwcNotices } from './notices';
+import {
+  fetchServiceForm,
+  resetService as resetServiceForm,
+  submitServiceForm,
+  uploadServiceAttachment,
+  validateServiceValues,
+} from './service';
+import {
+  ccylActivityDetail,
+  ccylActivityLibrary,
+  ccylActivityScoreTypes,
+  ccylCredits,
+  cancelCcylSignUp,
+  cancelCcylSubscribe,
+  ccylOrgs,
+  exportCcylCredits,
+  myCcylActivities,
+  orderedCcylActivities,
+  resetCcyl,
+  searchCcylActivities,
+  signUpCcylActivity,
+  subscribeCcylActivity,
+  type CcylSearchInput,
+} from './ccyl';
+import {
+  evaluateRepair,
+  fetchRepairAddresses,
+  fetchRepairAreaTree,
+  fetchRepairBookDates,
+  fetchRepairBookTimes,
+  fetchRepairEvaluateProjects,
+  fetchRepairProjects,
+  fetchRepairTickets,
+  resetRepair,
+  submitRepair,
+  withdrawRepair,
+} from './repair';
+import {
+  addPasspointDevice,
+  cancelPasspointDevice,
+  fetchPasspointDevices,
+  fetchPasspointUser,
+  resetPasspoint,
+} from './passpoint';
 
 /** 统一认证 → 教务的 SSO 入口（与 SCU-CLI/Bugaoshan 的 jwt23 一致）。 */
 const ID_SSO_ZHJW =
@@ -158,8 +207,12 @@ export async function disconnectScu(): Promise<void> {
   resetPayApp();
   resetFitness();
   resetService();
+  resetServiceForm();
   resetWfw();
   resetCloudPrint();
+  resetCcyl();
+  resetRepair();
+  resetPasspoint();
   clearIdentity();
   await clearCampusSession();
 }
@@ -169,8 +222,12 @@ export function resetScuSubsystems(): void {
   resetPayApp();
   resetFitness();
   resetService();
+  resetServiceForm();
   resetWfw();
   resetCloudPrint();
+  resetCcyl();
+  resetRepair();
+  resetPasspoint();
 }
 
 /** 云打印（只读）：会话检查与任务列表。 */
@@ -384,4 +441,186 @@ export function scuCourseSchedule(
   courseSeq: string,
 ): Promise<ScuResult<unknown>> {
   return result(() => fetchCourseSchedule(planCode, courseCode, courseSeq));
+}
+
+// ─── 办事大厅动态表单 ────────────────────────────────────────────
+
+export function scuServiceForm(appId: string): Promise<ScuResult<unknown>> {
+  return result(() => fetchServiceForm(appId));
+}
+
+export function scuServiceSubmit(
+  appId: string,
+  values: Record<string, unknown>,
+): Promise<ScuResult<unknown>> {
+  return result(() => submitServiceForm(appId, values));
+}
+
+export function scuServiceValidate(
+  schema: Parameters<typeof validateServiceValues>[0],
+  values: Record<string, unknown>,
+): Promise<ScuResult<unknown>> {
+  return result(async () => validateServiceValues(schema, values));
+}
+
+export function scuServiceAttach(
+  appId: string,
+  filePaths: readonly string[],
+): Promise<ScuResult<readonly unknown[]>> {
+  return result(async () => {
+    const uploaded: unknown[] = [];
+    for (const filePath of filePaths.slice(0, 10))
+      uploaded.push(await uploadServiceAttachment(appId, filePath));
+    return uploaded;
+  });
+}
+
+// ─── 第二课堂 ────────────────────────────────────────────────────
+
+export function scuCcylSearch(input: CcylSearchInput): Promise<ScuResult<unknown>> {
+  return result(() => searchCcylActivities(input));
+}
+
+export function scuCcylMine(page = 1): Promise<ScuResult<unknown>> {
+  return result(() => myCcylActivities(page));
+}
+
+export function scuCcylOrdered(page = 1, name = ''): Promise<ScuResult<unknown>> {
+  return result(() => orderedCcylActivities(page, 20, name));
+}
+
+export function scuCcylLibrary(id: string): Promise<ScuResult<unknown>> {
+  return result(() => ccylActivityLibrary(id));
+}
+
+export function scuCcylActivity(id: string): Promise<ScuResult<unknown>> {
+  return result(() => ccylActivityDetail(id));
+}
+
+export function scuCcylScoreTypes(libraryId: string): Promise<ScuResult<unknown>> {
+  return result(() => ccylActivityScoreTypes(libraryId));
+}
+
+export function scuCcylSignUp(activityId: string, scoreType: string): Promise<ScuResult<unknown>> {
+  return result(() => signUpCcylActivity(activityId, scoreType));
+}
+
+export function scuCcylCancel(activityId: string): Promise<ScuResult<unknown>> {
+  return result(() => cancelCcylSignUp(activityId));
+}
+
+export function scuCcylSubscribe(libraryId: string): Promise<ScuResult<unknown>> {
+  return result(() => subscribeCcylActivity(libraryId));
+}
+
+export function scuCcylUnsubscribe(libraryId: string): Promise<ScuResult<unknown>> {
+  return result(() => cancelCcylSubscribe(libraryId));
+}
+
+export function scuCcylCredits(page = 1): Promise<ScuResult<unknown>> {
+  return result(() => ccylCredits(page));
+}
+
+export function scuCcylExport(
+  creditIds: readonly string[],
+  email: string,
+): Promise<ScuResult<unknown>> {
+  return result(() => exportCcylCredits(creditIds, email));
+}
+
+export function scuCcylOrgs(): Promise<ScuResult<unknown>> {
+  return result(ccylOrgs);
+}
+
+// ─── 在线报修 ────────────────────────────────────────────────────
+
+export function scuRepairAddresses(): Promise<ScuResult<unknown>> {
+  return result(fetchRepairAddresses);
+}
+
+export function scuRepairAreas(): Promise<ScuResult<unknown>> {
+  return result(fetchRepairAreaTree);
+}
+
+export function scuRepairProjects(areaId: string): Promise<ScuResult<unknown>> {
+  return result(() => fetchRepairProjects(areaId));
+}
+
+export function scuRepairBookDates(): Promise<ScuResult<unknown>> {
+  return result(fetchRepairBookDates);
+}
+
+export function scuRepairBookTimes(date: string): Promise<ScuResult<unknown>> {
+  return result(() => fetchRepairBookTimes(date));
+}
+
+export function scuRepairTickets(userId: string): Promise<ScuResult<unknown>> {
+  return result(() => fetchRepairTickets(userId));
+}
+
+export function scuRepairWithdraw(id: string): Promise<ScuResult<unknown>> {
+  return result(() => withdrawRepair(id).then(() => ({ withdrawn: true })));
+}
+
+export function scuRepairEvaluateProjects(): Promise<ScuResult<unknown>> {
+  return result(fetchRepairEvaluateProjects);
+}
+
+export function scuRepairEvaluate(input: {
+  repairId: string;
+  stars: Record<string, number>;
+  content?: string;
+}): Promise<ScuResult<unknown>> {
+  return result(() => evaluateRepair(input).then(() => ({ evaluated: true })));
+}
+
+export function scuRepairSubmit(input: {
+  addressId: string;
+  projectId: string;
+  content: string;
+  bookDate?: string;
+  bookTime?: string;
+  allowAbsent?: boolean;
+  images?: readonly string[];
+}): Promise<ScuResult<unknown>> {
+  return result(async () => {
+    // 报修人姓名与服务端一致，取自微服务用户信息。
+    const profile = await fetchUserProfile().catch(() => null);
+    const realname =
+      profile && typeof profile === 'object'
+        ? String((profile as Record<string, unknown>).realname ?? '')
+        : '';
+    return submitRepair({ ...input, realname });
+  });
+}
+
+// ─── 无感认证 ────────────────────────────────────────────────────
+
+export function scuPasspointDevices(): Promise<ScuResult<unknown>> {
+  return result(fetchPasspointDevices);
+}
+
+export function scuPasspointUser(): Promise<ScuResult<unknown>> {
+  return result(fetchPasspointUser);
+}
+
+export function scuPasspointAdd(input: {
+  mac: string;
+  expireDays?: number;
+  serviceName?: string;
+}): Promise<ScuResult<unknown>> {
+  return result(() => addPasspointDevice(input).then(() => ({ added: true })));
+}
+
+export function scuPasspointCancel(mac: string): Promise<ScuResult<unknown>> {
+  return result(() => cancelPasspointDevice(mac).then(() => ({ canceled: true })));
+}
+
+// ─── 云打印上传 ──────────────────────────────────────────────────
+
+export function scuCloudPrintUpload(
+  filePath: string,
+  options: Parameters<typeof uploadCloudPrint>[1],
+): Promise<ScuResult<unknown>> {
+  return result(() => uploadCloudPrint(filePath, options));
 }

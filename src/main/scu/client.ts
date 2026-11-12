@@ -14,7 +14,8 @@ export interface ScuResponse {
 export interface ScuRequestInit {
   readonly method?: 'GET' | 'POST';
   readonly headers?: Record<string, string>;
-  readonly body?: string;
+  /** 表单/JSON 用字符串；multipart 上传用 Uint8Array（会按 Content-Length 发送）。 */
+  readonly body?: string | Uint8Array;
   readonly timeoutMs?: number;
 }
 

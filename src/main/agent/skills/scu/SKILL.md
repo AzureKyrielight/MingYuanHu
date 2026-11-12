@@ -42,6 +42,19 @@ description: 四川大学校园服务：教务成绩/考表/学期、宿舍电�
 | `dela scu_course_options`                                                              | 课程课表：学期/院系/课程类别选项                       |
 | `dela scu_course_search '{"name":"计算机"}'`                                           | 搜索课程（含 ZXJXJHH/KCH/KXH）                         |
 | `dela scu_course_schedule '{"planCode":"...","courseCode":"...","courseSeq":"..."}'`   | 课程（教学班）排课                                     |
+| `dela scu_service_form '{"appId":"1234"}'`                                             | 办事大厅事项的动态表单定义（字段 key/类型/选项/必填）  |
+| `dela scu_service_submit '{"appId":"1234","values":{...}}'`                            | 提交办事大厅事项（写操作；values 用表单字段 key）      |
+| `dela scu_ccyl_activities '{"name":"志愿"}'`                                           | 搜索第二课堂活动库                                     |
+| `dela scu_ccyl_mine` / `dela scu_ccyl_credits`                                          | 我参与的活动 / 学分记录                                |
+| `dela scu_ccyl_signup '{"activityId":"...","scoreType":""}'`                           | 报名活动（写操作）                                     |
+| `dela scu_ccyl_cancel '{"activityId":"..."}'`                                          | 取消报名（写操作）                                     |
+| `dela scu_repair_addresses`                                                            | 报修常用地址（含 addressId 与 userId）                 |
+| `dela scu_repair_projects '{"areaId":"..."}'`                                          | 报修项目树（提交取叶子 value）                         |
+| `dela scu_repair_tickets '{"userId":"..."}'`                                           | 我的报修工单                                           |
+| `dela scu_repair_submit '{"addressId":"...","projectId":"...","content":"..."}'`       | 提交报修（写操作）                                     |
+| `dela scu_passpoint_devices`                                                           | 校园网无感认证设备列表                                 |
+| `dela scu_passpoint_add '{"mac":"aa-bb-cc-dd-ee-ff","expireDays":0}'`                  | 绑定无感设备（写操作）                                 |
+| `dela scu_passpoint_cancel '{"mac":"aa-bb-cc-dd-ee-ff"}'`                              | 解绑设备（写操作）                                     |
 
 ## 使用要点
 

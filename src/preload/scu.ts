@@ -5,10 +5,12 @@ import type {
   ScuClassroomAvailabilityInput,
   ScuClassroomTypesInput,
   ScuClassListInput,
+  ScuCloudPrintOptions,
   ScuCourseSearchInput,
   ScuIdentityAutoLoginInput,
   ScuIdentityLoginInput,
   ScuProgramSearchInput,
+  ScuRepairSubmitInput,
 } from '../shared/scu';
 
 export const scu: ScuApi = {
@@ -39,6 +41,44 @@ export const scu: ScuApi = {
     ipcRenderer.invoke('scu:service-applications', status, page),
   cloudPrintStatus: () => ipcRenderer.invoke('scu:cloudprint-status'),
   cloudPrintJobs: () => ipcRenderer.invoke('scu:cloudprint-jobs'),
+  cloudPrintUpload: (options: ScuCloudPrintOptions) =>
+    ipcRenderer.invoke('scu:cloudprint-upload', options),
+  serviceForm: (appId: string) => ipcRenderer.invoke('scu:service-form', appId),
+  serviceAttach: (appId: string) => ipcRenderer.invoke('scu:service-attach', appId),
+  serviceSubmit: (appId: string, values: Record<string, unknown>) =>
+    ipcRenderer.invoke('scu:service-submit', appId, values),
+  ccylSearch: (input) => ipcRenderer.invoke('scu:ccyl-search', input ?? {}),
+  ccylMine: (page = 1) => ipcRenderer.invoke('scu:ccyl-mine', page),
+  ccylOrdered: (page = 1, name = '') => ipcRenderer.invoke('scu:ccyl-ordered', page, name),
+  ccylLibrary: (id: string) => ipcRenderer.invoke('scu:ccyl-library', id),
+  ccylActivity: (id: string) => ipcRenderer.invoke('scu:ccyl-activity', id),
+  ccylScoreTypes: (libraryId: string) => ipcRenderer.invoke('scu:ccyl-score-types', libraryId),
+  ccylSignUp: (activityId: string, scoreType: string) =>
+    ipcRenderer.invoke('scu:ccyl-signup', activityId, scoreType),
+  ccylCancel: (activityId: string) => ipcRenderer.invoke('scu:ccyl-cancel', activityId),
+  ccylSubscribe: (libraryId: string) => ipcRenderer.invoke('scu:ccyl-subscribe', libraryId),
+  ccylUnsubscribe: (libraryId: string) => ipcRenderer.invoke('scu:ccyl-unsubscribe', libraryId),
+  ccylCredits: (page = 1) => ipcRenderer.invoke('scu:ccyl-credits', page),
+  ccylExport: (creditIds: readonly string[], email: string) =>
+    ipcRenderer.invoke('scu:ccyl-export', creditIds, email),
+  ccylOrgs: () => ipcRenderer.invoke('scu:ccyl-orgs'),
+  repairAddresses: () => ipcRenderer.invoke('scu:repair-addresses'),
+  repairAreas: () => ipcRenderer.invoke('scu:repair-areas'),
+  repairProjects: (areaId: string) => ipcRenderer.invoke('scu:repair-projects', areaId),
+  repairBookDates: () => ipcRenderer.invoke('scu:repair-book-dates'),
+  repairBookTimes: (date: string) => ipcRenderer.invoke('scu:repair-book-times', date),
+  repairTickets: (userId: string) => ipcRenderer.invoke('scu:repair-tickets', userId),
+  repairWithdraw: (id: string) => ipcRenderer.invoke('scu:repair-withdraw', id),
+  repairEvaluateProjects: () => ipcRenderer.invoke('scu:repair-evaluate-projects'),
+  repairEvaluate: (input: { repairId: string; stars: Record<string, number>; content?: string }) =>
+    ipcRenderer.invoke('scu:repair-evaluate', input),
+  repairPickImages: () => ipcRenderer.invoke('scu:repair-pick-images'),
+  repairSubmit: (input: ScuRepairSubmitInput) => ipcRenderer.invoke('scu:repair-submit', input),
+  passpointDevices: () => ipcRenderer.invoke('scu:passpoint-devices'),
+  passpointUser: () => ipcRenderer.invoke('scu:passpoint-user'),
+  passpointAdd: (input: { mac: string; expireDays?: number; serviceName?: string }) =>
+    ipcRenderer.invoke('scu:passpoint-add', input),
+  passpointCancel: (mac: string) => ipcRenderer.invoke('scu:passpoint-cancel', mac),
   jwcNotices: (page = 1) => ipcRenderer.invoke('scu:jwc-notices', page),
   jwcNotice: (url: string) => ipcRenderer.invoke('scu:jwc-notice', url),
   classroomIndex: () => ipcRenderer.invoke('scu:classroom-index'),

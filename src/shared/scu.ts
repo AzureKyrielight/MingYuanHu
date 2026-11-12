@@ -175,6 +175,25 @@ export type ScuResult<T> =
   | { readonly ok: true; readonly data: T }
   | { readonly ok: false; readonly error: string; readonly auth: boolean };
 
+export interface ScuCloudPrintOptions {
+  readonly color: 'bw' | 'color';
+  readonly paper: 'a4' | 'a3' | 'original';
+  readonly duplex: 'simplex' | 'long-edge' | 'short-edge';
+  readonly copies: number;
+  /** 'all'、单页 '3' 或连续范围 '2-5'。 */
+  readonly pages: string;
+}
+
+export interface ScuRepairSubmitInput {
+  readonly addressId: string;
+  readonly projectId: string;
+  readonly content: string;
+  readonly bookDate?: string;
+  readonly bookTime?: string;
+  readonly allowAbsent?: boolean;
+  readonly images?: readonly string[];
+}
+
 export interface ScuApi {
   /** 打开川大统一身份认证窗口；成功后校园会话与其他子站 SSO 一并可用。 */
   connect(): Promise<{ ok: true } | { ok: false; error: string }>;
@@ -200,6 +219,63 @@ export interface ScuApi {
   /** 图书馆云打印（只读）：会话检查与任务列表。 */
   cloudPrintStatus(): Promise<ScuResult<{ ready: boolean }>>;
   cloudPrintJobs(): Promise<ScuResult<readonly unknown[]>>;
+  /** 选文件并上传（主进程弹系统选择框）；返回任务与核对结果。 */
+  cloudPrintUpload(options: ScuCloudPrintOptions): Promise<ScuResult<unknown>>;
+
+  /** 办事大厅：动态表单读取、附件上传、提交。 */
+  serviceForm(appId: string): Promise<ScuResult<unknown>>;
+  serviceAttach(appId: string): Promise<ScuResult<readonly unknown[]>>;
+  serviceSubmit(appId: string, values: Record<string, unknown>): Promise<ScuResult<unknown>>;
+
+  /** 第二课堂。 */
+  ccylSearch(input: {
+    page?: number;
+    name?: string;
+    level?: string;
+    scoreType?: string;
+    org?: string;
+    status?: string;
+  }): Promise<ScuResult<readonly unknown[]>>;
+  ccylMine(page?: number): Promise<ScuResult<readonly unknown[]>>;
+  ccylOrdered(page?: number, name?: string): Promise<ScuResult<readonly unknown[]>>;
+  ccylLibrary(id: string): Promise<ScuResult<unknown>>;
+  ccylActivity(id: string): Promise<ScuResult<unknown>>;
+  ccylScoreTypes(libraryId: string): Promise<ScuResult<readonly unknown[]>>;
+  ccylSignUp(activityId: string, scoreType: string): Promise<ScuResult<unknown>>;
+  ccylCancel(activityId: string): Promise<ScuResult<unknown>>;
+  ccylSubscribe(libraryId: string): Promise<ScuResult<unknown>>;
+  ccylUnsubscribe(libraryId: string): Promise<ScuResult<unknown>>;
+  ccylCredits(page?: number): Promise<ScuResult<readonly unknown[]>>;
+  ccylExport(creditIds: readonly string[], email: string): Promise<ScuResult<string>>;
+  ccylOrgs(): Promise<ScuResult<readonly unknown[]>>;
+
+  /** 在线报修（智慧后勤）。 */
+  repairAddresses(): Promise<ScuResult<readonly unknown[]>>;
+  repairAreas(): Promise<ScuResult<readonly unknown[]>>;
+  repairProjects(areaId: string): Promise<ScuResult<readonly unknown[]>>;
+  repairBookDates(): Promise<ScuResult<readonly string[]>>;
+  repairBookTimes(date: string): Promise<ScuResult<readonly string[]>>;
+  repairTickets(userId: string): Promise<ScuResult<readonly unknown[]>>;
+  repairWithdraw(id: string): Promise<ScuResult<unknown>>;
+  repairEvaluateProjects(): Promise<ScuResult<readonly unknown[]>>;
+  repairEvaluate(input: {
+    repairId: string;
+    stars: Record<string, number>;
+    content?: string;
+  }): Promise<ScuResult<unknown>>;
+  /** 弹框选现场照片（最多 3 张），返回路径给 repairSubmit 使用。 */
+  repairPickImages(): Promise<ScuResult<readonly string[]>>;
+  repairSubmit(input: ScuRepairSubmitInput): Promise<ScuResult<unknown>>;
+
+  /** 校园网无感认证。 */
+  passpointDevices(): Promise<ScuResult<readonly unknown[]>>;
+  passpointUser(): Promise<ScuResult<unknown>>;
+  passpointAdd(input: {
+    mac: string;
+    expireDays?: number;
+    serviceName?: string;
+  }): Promise<ScuResult<unknown>>;
+  passpointCancel(mac: string): Promise<ScuResult<unknown>>;
 
   /** 统一认证增强登录：密码仅本次调用使用，token 只存内存。 */
   identityState(): Promise<ScuIdentityState>;

@@ -1,5 +1,5 @@
 /** 川大校园服务 IPC。所有请求参数在主进程校验，渲染层只拿到结果或可展示错误。 */
-import { ipcMain } from 'electron';
+import { BrowserWindow, dialog, ipcMain, type OpenDialogOptions, type WebContents } from 'electron';
 import { z } from 'zod';
 import {
   connectScu,
@@ -37,8 +37,39 @@ import {
   resetScuSubsystems,
   scuCloudPrintStatus,
   scuCloudPrintJobs,
+  scuCloudPrintUpload,
   scuJwcNotices,
   scuJwcNotice,
+  scuServiceForm,
+  scuServiceAttach,
+  scuServiceSubmit,
+  scuCcylSearch,
+  scuCcylMine,
+  scuCcylOrdered,
+  scuCcylLibrary,
+  scuCcylActivity,
+  scuCcylScoreTypes,
+  scuCcylSignUp,
+  scuCcylCancel,
+  scuCcylSubscribe,
+  scuCcylUnsubscribe,
+  scuCcylCredits,
+  scuCcylExport,
+  scuCcylOrgs,
+  scuRepairAddresses,
+  scuRepairAreas,
+  scuRepairProjects,
+  scuRepairBookDates,
+  scuRepairBookTimes,
+  scuRepairTickets,
+  scuRepairWithdraw,
+  scuRepairEvaluateProjects,
+  scuRepairEvaluate,
+  scuRepairSubmit,
+  scuPasspointDevices,
+  scuPasspointUser,
+  scuPasspointAdd,
+  scuPasspointCancel,
 } from './api';
 import {
   clearIdentity,
@@ -63,6 +94,15 @@ const balanceInputSchema = z
     room: codeSchema.optional(),
   })
   .strict();
+
+/** 报修图片路径白名单：只有系统文件选择框返回过的路径才允许上传。 */
+const approvedRepairImages = new Set<string>();
+
+/** 有窗口时挂在窗口上（模态），否则退化为无父窗口对话框。 */
+function openFiles(sender: WebContents, options: OpenDialogOptions) {
+  const parent = BrowserWindow.fromWebContents(sender);
+  return parent ? dialog.showOpenDialog(parent, options) : dialog.showOpenDialog(options);
+}
 
 export function registerScuIpc(): void {
   ipcMain.handle('scu:connect', (event) => connectScu(event.sender));
@@ -274,4 +314,180 @@ export function registerScuIpc(): void {
         codeSchema.parse(courseSeq),
       ),
   );
+
+  // ─── 办事大厅动态表单 ──────────────────────────────────────────
+  ipcMain.handle('scu:service-form', (_event, appId: unknown) =>
+    scuServiceForm(codeSchema.parse(appId)),
+  );
+  ipcMain.handle('scu:service-attach', async (event, appId: unknown) => {
+    const id = codeSchema.parse(appId);
+    const picked = await openFiles(event.sender, {
+      title: '选择要上传的附件',
+      properties: ['openFile', 'multiSelections'],
+    });
+    if (picked.canceled || picked.filePaths.length === 0)
+      return { ok: true as const, data: [] as unknown[] };
+    return scuServiceAttach(id, picked.filePaths);
+  });
+  ipcMain.handle('scu:service-submit', (_event, appId: unknown, values: unknown) =>
+    scuServiceSubmit(
+      codeSchema.parse(appId),
+      z.record(z.string(), z.unknown()).parse(values ?? {}),
+    ),
+  );
+
+  // ─── 第二课堂 ──────────────────────────────────────────────────
+  ipcMain.handle('scu:ccyl-search', (_event, input: unknown) =>
+    scuCcylSearch(
+      z
+        .object({
+          page: z.number().int().min(1).max(999).optional(),
+          name: optionalTextSchema,
+          level: optionalTextSchema,
+          scoreType: optionalTextSchema,
+          org: optionalTextSchema,
+          status: optionalTextSchema,
+        })
+        .strict()
+        .default({})
+        .parse(input ?? {}),
+    ),
+  );
+  ipcMain.handle('scu:ccyl-mine', (_event, page: unknown) =>
+    scuCcylMine(z.number().int().min(1).max(999).default(1).parse(page)),
+  );
+  ipcMain.handle('scu:ccyl-ordered', (_event, page: unknown, name: unknown) =>
+    scuCcylOrdered(
+      z.number().int().min(1).max(999).default(1).parse(page),
+      optionalTextSchema.parse(name) ?? '',
+    ),
+  );
+  ipcMain.handle('scu:ccyl-library', (_event, id: unknown) => scuCcylLibrary(codeSchema.parse(id)));
+  ipcMain.handle('scu:ccyl-activity', (_event, id: unknown) =>
+    scuCcylActivity(codeSchema.parse(id)),
+  );
+  ipcMain.handle('scu:ccyl-score-types', (_event, id: unknown) =>
+    scuCcylScoreTypes(codeSchema.parse(id)),
+  );
+  ipcMain.handle('scu:ccyl-signup', (_event, activityId: unknown, scoreType: unknown) =>
+    scuCcylSignUp(
+      codeSchema.parse(activityId),
+      z.string().trim().max(64).default('').parse(scoreType),
+    ),
+  );
+  ipcMain.handle('scu:ccyl-cancel', (_event, id: unknown) => scuCcylCancel(codeSchema.parse(id)));
+  ipcMain.handle('scu:ccyl-subscribe', (_event, id: unknown) =>
+    scuCcylSubscribe(codeSchema.parse(id)),
+  );
+  ipcMain.handle('scu:ccyl-unsubscribe', (_event, id: unknown) =>
+    scuCcylUnsubscribe(codeSchema.parse(id)),
+  );
+  ipcMain.handle('scu:ccyl-credits', (_event, page: unknown) =>
+    scuCcylCredits(z.number().int().min(1).max(999).default(1).parse(page)),
+  );
+  ipcMain.handle('scu:ccyl-export', (_event, ids: unknown, email: unknown) =>
+    scuCcylExport(
+      z.array(z.string().trim().min(1).max(64)).max(200).parse(ids),
+      z.string().email().max(128).parse(email),
+    ),
+  );
+  ipcMain.handle('scu:ccyl-orgs', () => scuCcylOrgs());
+
+  // ─── 在线报修 ──────────────────────────────────────────────────
+  ipcMain.handle('scu:repair-addresses', () => scuRepairAddresses());
+  ipcMain.handle('scu:repair-areas', () => scuRepairAreas());
+  ipcMain.handle('scu:repair-projects', (_event, areaId: unknown) =>
+    scuRepairProjects(codeSchema.parse(areaId)),
+  );
+  ipcMain.handle('scu:repair-book-dates', () => scuRepairBookDates());
+  ipcMain.handle('scu:repair-book-times', (_event, date: unknown) =>
+    scuRepairBookTimes(dateSchema.parse(date)),
+  );
+  ipcMain.handle('scu:repair-tickets', (_event, userId: unknown) =>
+    scuRepairTickets(codeSchema.parse(userId)),
+  );
+  ipcMain.handle('scu:repair-withdraw', (_event, id: unknown) =>
+    scuRepairWithdraw(codeSchema.parse(id)),
+  );
+  ipcMain.handle('scu:repair-evaluate-projects', () => scuRepairEvaluateProjects());
+  ipcMain.handle('scu:repair-evaluate', (_event, input: unknown) =>
+    scuRepairEvaluate(
+      z
+        .object({
+          repairId: codeSchema,
+          stars: z.record(z.string(), z.number().int().min(1).max(5)),
+          content: optionalTextSchema,
+        })
+        .strict()
+        .parse(input),
+    ),
+  );
+  ipcMain.handle('scu:repair-pick-images', async (event) => {
+    const picked = await openFiles(event.sender, {
+      title: '选择现场照片（最多 3 张）',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: '图片', extensions: ['jpg', 'jpeg', 'png', 'heic', 'heif'] }],
+    });
+    if (picked.canceled) return { ok: true as const, data: [] as string[] };
+    const files = picked.filePaths.slice(0, 3);
+    for (const file of files) approvedRepairImages.add(file);
+    return { ok: true as const, data: files };
+  });
+  ipcMain.handle('scu:repair-submit', (_event, input: unknown) => {
+    const parsed = z
+      .object({
+        addressId: codeSchema,
+        projectId: codeSchema,
+        content: z.string().trim().min(1).max(2000),
+        bookDate: z.union([dateSchema, z.literal('')]).optional(),
+        bookTime: optionalTextSchema,
+        allowAbsent: z.boolean().optional(),
+        images: z.array(z.string().min(1).max(1024)).max(3).optional(),
+      })
+      .strict()
+      .parse(input);
+    // 只接受本窗口通过选择框授权的图片路径，防止渲染层传入任意路径。
+    const images = (parsed.images ?? []).filter((path) => approvedRepairImages.has(path));
+    return scuRepairSubmit({ ...parsed, images });
+  });
+
+  // ─── 无感认证 ──────────────────────────────────────────────────
+  ipcMain.handle('scu:passpoint-devices', () => scuPasspointDevices());
+  ipcMain.handle('scu:passpoint-user', () => scuPasspointUser());
+  ipcMain.handle('scu:passpoint-add', (_event, input: unknown) =>
+    scuPasspointAdd(
+      z
+        .object({
+          mac: z.string().trim().min(11).max(32),
+          expireDays: z.number().int().min(0).max(365).optional(),
+          serviceName: optionalTextSchema,
+        })
+        .strict()
+        .parse(input),
+    ),
+  );
+  ipcMain.handle('scu:passpoint-cancel', (_event, mac: unknown) =>
+    scuPasspointCancel(z.string().trim().min(11).max(32).parse(mac)),
+  );
+
+  // ─── 云打印上传 ────────────────────────────────────────────────
+  ipcMain.handle('scu:cloudprint-upload', async (event, options: unknown) => {
+    const parsed = z
+      .object({
+        color: z.enum(['bw', 'color']),
+        paper: z.enum(['a4', 'a3', 'original']),
+        duplex: z.enum(['simplex', 'long-edge', 'short-edge']),
+        copies: z.number().int().min(1).max(999),
+        pages: z.string().trim().min(1).max(16),
+      })
+      .strict()
+      .parse(options);
+    const picked = await openFiles(event.sender, {
+      title: '选择要打印的文件',
+      properties: ['openFile'],
+    });
+    if (picked.canceled || !picked.filePaths[0])
+      return { ok: false as const, error: '已取消选择文件', auth: false };
+    return scuCloudPrintUpload(picked.filePaths[0], parsed);
+  });
 }

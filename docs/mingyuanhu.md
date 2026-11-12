@@ -94,6 +94,11 @@ Dela 的 `release.yml` 也是先 `--publish never` 再用 `gh release create/upl
 | 宿舍电费                 | `payapp.scu.edu.cn` 缴费平台                            | `src/main/scu/payapp.ts`                            |
 | 体测成绩 / 通知          | `pead.scu.edu.cn` 体测系统                              | `src/main/scu/fitness.ts`                           |
 | 办事大厅我的申请         | `service.scu.edu.cn`                                    | `src/main/scu/service.ts`                           |
+| 办事大厅动态表单 / 提交  | `service.scu.edu.cn`（start-data + get-formv + launch） | `src/main/scu/service.ts`、`service-form.ts`        |
+| 第二课堂活动 / 学分      | `dekt.scu.edu.cn/ccyl-api`（独立 OAuth token）          | `src/main/scu/ccyl.ts`                              |
+| 在线报修（智慧后勤）     | `zhhq.scu.edu.cn/api`（AES 加密 Token 头与响应）        | `src/main/scu/repair.ts`                            |
+| 校园网无感认证           | `service.scu.edu.cn/newservice`（passpoint）            | `src/main/scu/passpoint.ts`                         |
+| 图书馆云打印             | `202.115.54.240`（会话检查 / 任务 / 上传）              | `src/main/scu/cloudprint.ts`                        |
 
 所有请求复用 Chromium 的校园会话分区 `persist:mingyuanhu-campus`，cookie 加密持久化；token、密码不进入 renderer，也不写入数据库。
 
@@ -109,6 +114,11 @@ Dela 的 `release.yml` 也是先 `--publish never` 再用 `gh release create/upl
 - `scu_fitness`
 - `scu_card_transactions`
 - `scu_service_applications`
+- `scu_jwc_notices` / `scu_jwc_notice`
+- `scu_service_form` / `scu_service_submit`
+- `scu_ccyl_activities` / `scu_ccyl_mine` / `scu_ccyl_credits` / `scu_ccyl_signup` / `scu_ccyl_cancel`
+- `scu_repair_addresses` / `scu_repair_projects` / `scu_repair_tickets` / `scu_repair_submit`
+- `scu_passpoint_devices` / `scu_passpoint_add` / `scu_passpoint_cancel`
 
 内置 Skill 位于 `src/main/agent/skills/scu/SKILL.md`，随应用写入 `~/.dela/skills/scu/`（沿用上游数据目录以兼容备份与设置）。
 
@@ -125,22 +135,22 @@ Dela 的 `release.yml` 也是先 `--publish never` 再用 `gh release create/upl
 - 邮箱预设：学生 `@stu.scu.edu.cn` 的网页入口是 https://mail.stu.scu.edu.cn，但 IMAP/SMTP 必须连它的 CNAME 目标 `edu.icoremail.net`（993/465，SSL）——直接用 `mail.stu.scu.edu.cn` 会因证书只覆盖 `*.icoremail.net` 而 TLS 校验失败。教工 `@scu.edu.cn` 使用 `mail.scu.edu.cn`。学生邮箱需先激活；若开启二次验证，请使用客户端专用密码，而不是统一身份认证密码。
 - 自动更新：发布源改为本仓库的 GitHub Releases（`AzureKyrielight/MingYuanHu`），不再指向上游 CDN；构建时生成 `latest.yml` 一并上传，应用内「检查更新」发现新版本会自动下载，下载完成后点「重新启动并安装」即可升级。
 
-## 尚未接入
+## 移植状态
 
-以下 SCU-CLI 能力尚未移植（协议实现见 `SCU-CLI/internal/api/`）：
+与 SCU-CLI 的能力对照（协议实现见 `SCU-CLI/internal/api/`）：
 
-| SCU-CLI 命令组                                  | 内容                                                                       | 状态                                    |
-| ----------------------------------------------- | -------------------------------------------------------------------------- | --------------------------------------- |
-| `ccyl`                                          | 第二课堂：活动列表、详情、报名/取消、预约/取消预约、学分、成绩单导出       | 未移植                                  |
-| `cloudprint`                                    | 云打印：会话检查、任务列表已移植；上传（颜色/纸型/双面/份数/页范围）未移植 | 部分移植                                |
-| `repair`                                        | 智慧后勤报修：地址、区域、项目、可预约日期/时段、提交、进度、撤回、评价    | 未移植                                  |
-| `passpoint`                                     | 校园网无感认证：用户信息、设备列表、新增/取消 MAC 绑定                     | 未移植                                  |
-| `service form` / `service submit`               | 办事大厅动态表单读取、提交、附件上传                                       | 未移植（`applications` 已移植）         |
-| `zhjw calendar`                                 | 校历（免认证获取 + ICS 导出）                                              | 已移植                                  |
-| `user labels` / `user devices` / `user offline` | 用户标签、校园网在线设备、强制下线                                         | 未移植（`user info`、校园卡交易已移植） |
-| `--ics` 导出                                    | 课表 / 考表 / 校历导出为 ICS                                               | 已移植                                  |
+| SCU-CLI 命令组                                  | 内容                                                                    | 状态                                    |
+| ----------------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------- |
+| `ccyl`                                          | 第二课堂：活动列表、报名/取消、预约/取消预约、学分                      | 已移植（成绩单导出仅保留接口）          |
+| `cloudprint`                                    | 云打印：会话检查、任务列表、上传（颜色/纸型/双面/份数/页范围）          | 已移植                                  |
+| `repair`                                        | 智慧后勤报修：地址、区域、项目、可预约日期/时段、提交、工单、撤回、评价 | 已移植                                  |
+| `passpoint`                                     | 校园网无感认证：用户信息、设备列表、新增/取消 MAC 绑定                  | 已移植                                  |
+| `service form` / `service submit`               | 办事大厅动态表单读取、提交、附件上传                                    | 已移植                                  |
+| `zhjw calendar`                                 | 校历（免认证获取 + ICS 导出）                                           | 已移植                                  |
+| `user labels` / `user devices` / `user offline` | 用户标签、校园网在线设备、强制下线                                      | 未移植（`user info`、校园卡交易已移植） |
+| `--ics` 导出                                    | 课表 / 考表 / 校历导出为 ICS                                            | 已移植                                  |
 
-已移植并有 UI：成绩、考表、电费（含趋势）、体测、校园卡交易、办事大厅我的申请、空闲教室、培养方案与学分完成、班级/课程课表、教务处通知、校历与 ICS 导出、云打印（只读）。
+已移植并有 UI：成绩、考表、电费（含趋势）、体测、校园卡交易、办事大厅（我的申请 + 动态表单提交）、第二课堂、在线报修、无感认证、空闲教室、培养方案与学分完成、班级/课程课表、教务处通知、校历与 ICS 导出、云打印（任务列表 + 上传）。
 
 ## 登录方式
 

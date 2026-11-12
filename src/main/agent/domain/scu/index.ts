@@ -35,6 +35,20 @@ import {
   scuProgramDetail,
   scuProgramGrades,
   scuProgramSearch,
+  scuServiceForm,
+  scuServiceSubmit,
+  scuCcylSearch,
+  scuCcylMine,
+  scuCcylCredits,
+  scuCcylSignUp,
+  scuCcylCancel,
+  scuRepairAddresses,
+  scuRepairProjects,
+  scuRepairTickets,
+  scuRepairSubmit,
+  scuPasspointDevices,
+  scuPasspointAdd,
+  scuPasspointCancel,
 } from '../../../scu/api';
 import { tool } from '../shared';
 
@@ -320,6 +334,121 @@ export const scuCourseScheduleTool = tool(
     unwrap(scuCourseSchedule(planCode, courseCode, courseSeq)),
 );
 
+export const scuServiceFormTool = tool(
+  '读取办事大厅事项的动态表单定义（只读）。appId 是事项 id；返回 formId 与字段列表（key/type/label/是否必填/选项）。填表时用字段 key 作为 scu_service_submit 的 values 键。',
+  z.object({ appId: z.string().trim().min(1).max(64) }).strict(),
+  ({ appId }) => unwrap(scuServiceForm(appId)),
+);
+
+export const scuServiceSubmitTool = tool(
+  '提交办事大厅事项（写操作，会真实发起流程）。values 的键取自 scu_service_form 返回的字段 key；附件字段需要用户先在界面上传并传入 {name,url,id} 数组。',
+  z
+    .object({
+      appId: z.string().trim().min(1).max(64),
+      values: z.record(z.string(), z.unknown()),
+    })
+    .strict(),
+  ({ appId, values }) => unwrap(scuServiceSubmit(appId, values)),
+);
+
+export const scuCcylActivitiesTool = tool(
+  '搜索四川大学第二课堂活动库（只读）。name 为活动名关键词；返回活动 id、名称、组织、时间与状态。',
+  z
+    .object({
+      name: z.string().trim().max(100).optional(),
+      page: z.number().int().min(1).max(999).optional(),
+    })
+    .strict(),
+  (input) => unwrap(scuCcylSearch(input)),
+);
+
+export const scuCcylMineTool = tool(
+  '列出我参与的第二课堂活动（只读）。返回活动 id、名称与报名状态。',
+  z.object({ page: z.number().int().min(1).max(999).optional() }).strict(),
+  ({ page }) => unwrap(scuCcylMine(page ?? 1)),
+);
+
+export const scuCcylCreditsTool = tool(
+  '读取第二课堂学分/成绩单（只读）。',
+  z.object({ page: z.number().int().min(1).max(999).optional() }).strict(),
+  ({ page }) => unwrap(scuCcylCredits(page ?? 1)),
+);
+
+export const scuCcylSignUpTool = tool(
+  '报名第二课堂活动（写操作）。activityId 取自 scu_ccyl_activities；scoreType 为空时按服务端默认可选类型提交。',
+  z
+    .object({
+      activityId: z.string().trim().min(1).max(64),
+      scoreType: z.string().trim().max(64).default(''),
+    })
+    .strict(),
+  ({ activityId, scoreType }) => unwrap(scuCcylSignUp(activityId, scoreType)),
+);
+
+export const scuCcylCancelTool = tool(
+  '取消已报名的第二课堂活动（写操作）。',
+  z.object({ activityId: z.string().trim().min(1).max(64) }).strict(),
+  ({ activityId }) => unwrap(scuCcylCancel(activityId)),
+);
+
+export const scuRepairAddressesTool = tool(
+  '读取智慧后勤报修的常用地址（只读）。返回地址 id、区域 id/名称、详细地址与联系电话；提交报修时用 addressId。',
+  z.object({}).strict(),
+  () => unwrap(scuRepairAddresses()),
+);
+
+export const scuRepairProjectsTool = tool(
+  '读取某区域的报修项目树（只读）。areaId 取自 scu_repair_addresses；提交时报 projectId 用叶子节点的 value。',
+  z.object({ areaId: z.string().trim().min(1).max(64) }).strict(),
+  ({ areaId }) => unwrap(scuRepairProjects(areaId)),
+);
+
+export const scuRepairTicketsTool = tool(
+  '读取我的报修工单（只读）。userId 取自 scu_repair_addresses 返回的 userId。',
+  z.object({ userId: z.string().trim().min(1).max(64) }).strict(),
+  ({ userId }) => unwrap(scuRepairTickets(userId)),
+);
+
+export const scuRepairSubmitTool = tool(
+  '提交在线报修工单（写操作）。需要 addressId、projectId（叶子 value）与故障描述；预约日期/时段可选。现场照片需用户先在界面上选好，模型只能传已选路径。',
+  z
+    .object({
+      addressId: z.string().trim().min(1).max(64),
+      projectId: z.string().trim().min(1).max(64),
+      content: z.string().trim().min(1).max(2000),
+      bookDate: dateSchema.optional(),
+      bookTime: z.string().trim().max(64).optional(),
+      allowAbsent: z.boolean().optional(),
+      images: z.array(z.string().min(1).max(1024)).max(3).optional(),
+    })
+    .strict(),
+  (input) => unwrap(scuRepairSubmit(input)),
+);
+
+export const scuPasspointDevicesTool = tool(
+  '读取校园网无感认证（passpoint）已绑定设备（只读）。返回 MAC、到期日、服务名与是否在线。',
+  z.object({}).strict(),
+  () => unwrap(scuPasspointDevices()),
+);
+
+export const scuPasspointAddTool = tool(
+  '绑定校园网无感认证设备（写操作）。mac 支持 aa-bb-cc-dd-ee-ff 或 aa:bb:...；expireDays 为 0-365，0 表示最长有效期。',
+  z
+    .object({
+      mac: z.string().trim().min(11).max(32),
+      expireDays: z.number().int().min(0).max(365).optional(),
+      serviceName: z.string().trim().max(32).optional(),
+    })
+    .strict(),
+  (input) => unwrap(scuPasspointAdd(input)),
+);
+
+export const scuPasspointCancelTool = tool(
+  '解绑校园网无感认证设备（写操作）。',
+  z.object({ mac: z.string().trim().min(11).max(32) }).strict(),
+  ({ mac }) => unwrap(scuPasspointCancel(mac)),
+);
+
 export const scuTools = {
   scu_whoami: scuWhoamiTool,
   scu_cloudprint_check: scuCloudPrintCheckTool,
@@ -353,4 +482,18 @@ export const scuTools = {
   scu_course_options: scuCourseOptionsTool,
   scu_course_search: scuCourseSearchTool,
   scu_course_schedule: scuCourseScheduleTool,
+  scu_service_form: scuServiceFormTool,
+  scu_service_submit: scuServiceSubmitTool,
+  scu_ccyl_activities: scuCcylActivitiesTool,
+  scu_ccyl_mine: scuCcylMineTool,
+  scu_ccyl_credits: scuCcylCreditsTool,
+  scu_ccyl_signup: scuCcylSignUpTool,
+  scu_ccyl_cancel: scuCcylCancelTool,
+  scu_repair_addresses: scuRepairAddressesTool,
+  scu_repair_projects: scuRepairProjectsTool,
+  scu_repair_tickets: scuRepairTicketsTool,
+  scu_repair_submit: scuRepairSubmitTool,
+  scu_passpoint_devices: scuPasspointDevicesTool,
+  scu_passpoint_add: scuPasspointAddTool,
+  scu_passpoint_cancel: scuPasspointCancelTool,
 };

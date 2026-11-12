@@ -1,8 +1,11 @@
 /** 图书馆云打印（202.115.54.240）：复用统一认证 cookie 走 libic/CAS 登录取会话。
- *  token 与密码不会发往打印站；只读接口（Check / 任务列表）先落地，上传后续再接。 */
+ *  token 与密码不会发往打印站；支持会话检查、任务列表与文件上传。 */
+import { readFile, stat } from 'node:fs/promises';
+import { basename } from 'node:path';
 import { CampusAuthError } from '../campus';
 import { scuRequest } from './client';
 import { bindIdentitySession } from './identity';
+import { buildMultipart, contentTypeFor } from './multipart';
 
 const BASE = 'http://202.115.54.240';
 const PAGE = `${BASE}/client/new/cprintPc/cprint.html`;
@@ -169,4 +172,209 @@ export async function fetchCloudPrintJobs(): Promise<unknown[]> {
   if (body.result === null) return [];
   if (!Array.isArray(body.result)) throw new Error('云打印任务列表 result 不是数组');
   return body.result.map(mapCloudPrintJob);
+}
+
+// ─── 上传 ────────────────────────────────────────────────────────
+
+export interface CloudPrintOptions {
+  /** bw（黑白）或 color（彩色）。 */
+  readonly color: 'bw' | 'color';
+  /** A4 / A3 / 原稿尺寸。 */
+  readonly paper: 'a4' | 'a3' | 'original';
+  /** 单面 / 长边翻页 / 短边翻页。 */
+  readonly duplex: 'simplex' | 'long-edge' | 'short-edge';
+  readonly copies: number;
+  /** 'all'、单页 '3' 或连续范围 '2-5'。 */
+  readonly pages: string;
+}
+
+export interface CloudPrintSettings {
+  readonly options: CloudPrintOptions;
+  /** 已翻译成打印站协议值的字段。 */
+  readonly fields: Readonly<Record<string, string>>;
+}
+
+const COLOR_CODES: Record<string, string> = { bw: '1', color: '2' };
+const PAPER_CODES: Record<string, string> = { a4: '9', a3: '8', original: '-1' };
+const DUPLEX_CODES: Record<string, string> = { simplex: '1', 'long-edge': '2', 'short-edge': '3' };
+
+/** 校验设置并转成协议字段（纯函数，便于单测）。 */
+export function prepareCloudPrintOptions(options: CloudPrintOptions): CloudPrintSettings {
+  const color = COLOR_CODES[options.color];
+  const paper = PAPER_CODES[options.paper];
+  const duplex = DUPLEX_CODES[options.duplex];
+  if (!color) throw new Error('颜色只能是 bw 或 color');
+  if (!paper) throw new Error('纸张只能是 a4、a3 或 original');
+  if (!duplex) throw new Error('双面只能是 simplex、long-edge 或 short-edge');
+  if (!Number.isInteger(options.copies) || options.copies < 1 || options.copies > 999)
+    throw new Error('份数必须是 1-999 的整数');
+  let from = '0';
+  let to = '0';
+  if (options.pages.trim() !== 'all') {
+    const match = /^(\d{1,4})(?:-(\d{1,4}))?$/.exec(options.pages.trim());
+    if (!match) throw new Error('页码只能是 all、单页（如 3）或连续范围（如 2-5）');
+    const first = Number(match[1]);
+    const last = Number(match[2] ?? match[1]);
+    if (first < 1) throw new Error('起始页必须从 1 开始');
+    if (last < first) throw new Error('结束页不能小于起始页');
+    from = String(first);
+    to = String(last);
+  }
+  return {
+    options,
+    fields: {
+      dwColor: color,
+      dwPaperId: paper,
+      dwDuplex: duplex,
+      dwCopies: String(options.copies),
+      dwFrom: from,
+      dwTo: to,
+    },
+  };
+}
+
+/** 允许的上传格式（与打印站前端一致）。 */
+export const CLOUD_PRINT_EXTENSIONS = new Set(
+  'jpg jpeg heic png pdf txt doc xls docx xlsx ppt pptx wps wpt dot rtf dotx docm dotm xml mht mhtml html htm xps odt xlsm xlsb csv xltx xltm xlt prn dif slk xla xlam ods dps dpt pot pps pptm potm ppsm'.split(
+    ' ',
+  ),
+);
+
+export interface CloudPrintUploadResult {
+  readonly status: 'uploaded';
+  readonly fileName: string;
+  /** 打印费用（元），服务端未返回时为空串。 */
+  readonly fee: string;
+  /** 上传后新增且同名的任务（正常应为 1 条）。 */
+  readonly jobs: readonly unknown[];
+  readonly verification: 'matched_new_job' | 'candidate_new_job' | 'ambiguous' | 'pending';
+  readonly message: string;
+  readonly warning?: string;
+}
+
+const jobIdOf = (job: unknown): string => {
+  if (!job || typeof job !== 'object') return '';
+  const value = (job as Record<string, unknown>).dwJobId;
+  return value === null || value === undefined ? '' : String(value);
+};
+
+const jobNameOf = (job: unknown): string => {
+  if (!job || typeof job !== 'object') return '';
+  const value = (job as Record<string, unknown>).szJobName;
+  return typeof value === 'string' ? value : '';
+};
+
+/** 只按任务 ID 做前后差集：长文件名会被服务端截断，不能按名字判断「新增」。 */
+export function newCloudPrintJobs(
+  before: readonly unknown[],
+  after: readonly unknown[],
+): unknown[] {
+  const known = new Set(before.map(jobIdOf).filter(Boolean));
+  return after.filter((job) => {
+    const id = jobIdOf(job);
+    return id !== '' && !known.has(id);
+  });
+}
+
+/** 上传文件到云打印：提交后任务列表核对，失败不自动重发（避免重复打印）。 */
+export async function uploadCloudPrint(
+  filePath: string,
+  options: CloudPrintOptions,
+): Promise<CloudPrintUploadResult> {
+  const settings = prepareCloudPrintOptions(options);
+  const info = await stat(filePath);
+  if (!info.isFile()) throw new Error('选择的不是普通文件');
+  const extension = filePath.split('.').pop()?.toLowerCase() ?? '';
+  if (!CLOUD_PRINT_EXTENSIONS.has(extension)) throw new Error('该文件格式不支持云打印');
+  await ensureCloudPrint();
+
+  const before = await fetchCloudPrintJobs();
+  const name = basename(filePath);
+  const data = new Uint8Array(await readFile(filePath));
+  const { body, contentType } = buildMultipart([
+    ...Object.entries(settings.fields).map(([field, value]) => ({ field, value })),
+    { field: 'BackURL', value: `${JOBS_PAGE}?t=${Date.now()}` },
+    { field: 'szPath', filename: name, contentType: contentTypeFor(name), data },
+  ]);
+
+  let response: Awaited<ReturnType<typeof scuRequest>>;
+  try {
+    response = await scuRequest(`${BASE}/api/client/CloudPrint/Upload`, {
+      method: 'POST',
+      headers: { 'Content-Type': contentType, Origin: BASE, Referer: PAGE },
+      body,
+      timeoutMs: 180_000,
+    });
+  } catch (error) {
+    throw new Error(
+      `文件上传请求失败，服务器是否已接收未知；请到任务列表核对后再决定是否重传（${
+        error instanceof Error ? error.message : String(error)
+      }）`,
+    );
+  }
+
+  if (response.status === 413) throw new Error('云打印服务器拒绝文件（HTTP 413，文件过大）');
+  if (response.status !== 200) throw new Error(`上传响应异常（HTTP ${response.status}）`);
+  let code: number | null = null;
+  let fee = '';
+  try {
+    const url = new URL(response.url);
+    const raw = url.searchParams.get('code');
+    code = raw === null ? null : Number(raw);
+    fee = url.searchParams.get('fee') ?? '';
+  } catch {
+    code = null;
+  }
+  if (code === null || Number.isNaN(code)) throw new Error('上传响应缺少 code 参数');
+  if (code !== 0) {
+    if (code === 4) throw new CampusAuthError('云打印会话已失效，上传结果未知，请先核对任务列表');
+    throw new Error(`云打印上传失败（code=${code}）`);
+  }
+
+  const result: CloudPrintUploadResult = {
+    status: 'uploaded',
+    fileName: name,
+    fee,
+    jobs: [],
+    verification: 'pending',
+    message: '文件已上传到云打印系统；到馆内终端刷校园卡确认打印',
+  };
+
+  let candidates: unknown[] = [];
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 300));
+    let after: unknown[];
+    try {
+      after = await fetchCloudPrintJobs();
+    } catch {
+      return {
+        ...result,
+        jobs: candidates,
+        verification: 'candidate_new_job',
+        warning: '上传成功，但任务列表核对失败；请稍后在任务列表确认，不要直接重复上传',
+      };
+    }
+    const added = newCloudPrintJobs(before, after);
+    for (const job of added) {
+      if (!candidates.some((item) => jobIdOf(item) === jobIdOf(job))) candidates.push(job);
+    }
+    const sameName = added.filter((job) => jobNameOf(job) === name);
+    if (sameName.length === 1)
+      return { ...result, jobs: sameName, verification: 'matched_new_job' };
+    if (sameName.length > 1)
+      return {
+        ...result,
+        jobs: sameName,
+        verification: 'ambiguous',
+        warning: '上传已确认，但出现多个同名新任务，请核对任务 ID，不要重复上传',
+      };
+  }
+  if (candidates.length > 0)
+    return {
+      ...result,
+      jobs: candidates,
+      verification: 'candidate_new_job',
+      warning: '上传已确认，但任务名与服务端记录不一致，请按任务 ID 核对',
+    };
+  return { ...result, verification: 'pending' };
 }
