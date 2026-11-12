@@ -267,10 +267,11 @@ export interface RepairProject {
 
 function mapProject(raw: unknown): RepairProject {
   const value = isRecord(raw) ? raw : {};
+  // 服务端字段是 label（对齐 SCU-CLI），早期误读 name 会让项目名全空、提交被判缺少参数。
   return {
     id: textOf(value.id),
-    name: textOf(value.name),
-    value: textOf(value.value),
+    name: textOf(value.label) || textOf(value.name),
+    value: textOf(value.value) || textOf(value.id),
     children: Array.isArray(value.children) ? value.children.map(mapProject) : [],
   };
 }
@@ -347,7 +348,8 @@ function mapTicket(raw: unknown): RepairTicket {
     return content;
   })();
   return {
-    id: textOf(value.id),
+    // 列表行的 id 不是工单 id，撤回/详情要用 activeId（对齐 SCU-CLI）。
+    id: textOf(value.activeId) || textOf(value.id),
     status: textOf(value.status) || textOf(value.flowStatus),
     createTime: textOf(value.createTime),
     content:
