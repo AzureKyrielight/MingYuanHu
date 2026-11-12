@@ -3,13 +3,15 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 assert.equal(process.platform, 'darwin', '请在 macOS 上验证 Mac 产物');
 assert.equal(process.arch, 'arm64', 'macOS 仅支持 Apple Silicon');
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const bundle = resolve(process.argv[2] || join(root, 'dist', 'mac-arm64', 'Dela.app'));
+// 产物名跟随 productName（明远湖光），不能写死 Dela.app。
+const bundle = resolve(process.argv[2] || join(root, 'dist', 'mac-arm64', '明远湖光.app'));
+const appName = basename(bundle, '.app');
 const resources = join(bundle, 'Contents', 'Resources');
 const signed = process.argv.includes('--signed');
 const teamId = process.env.APPLE_TEAM_ID || '';
@@ -60,11 +62,11 @@ const plist = (key: string) =>
       encoding: 'utf8',
     },
   ).trim();
-assert.equal(plist('CFBundleIdentifier'), 'io.dela.desktop');
+assert.equal(plist('CFBundleIdentifier'), 'io.mingyuanhu.desktop');
 assert.equal(plist('CFBundleShortVersionString'), version);
 assert.equal(plist('LSApplicationCategoryType'), 'public.app-category.productivity');
 assert.equal(
-  execFileSync('/usr/bin/lipo', ['-archs', join(bundle, 'Contents/MacOS/Dela')], {
+  execFileSync('/usr/bin/lipo', ['-archs', join(bundle, 'Contents', 'MacOS', appName)], {
     encoding: 'utf8',
   }).trim(),
   'arm64',
@@ -108,7 +110,7 @@ for (const arch of ['amd64', 'arm64']) {
   );
 }
 if (!process.argv.includes('--dir')) {
-  const prefix = join(resolve(bundle, '../..'), `Dela-${version}-mac-${process.arch}`);
+  const prefix = join(resolve(bundle, '../..'), `MingYuanHu-${version}-mac-${process.arch}`);
   for (const extension of ['dmg', 'zip']) assert.ok(statSync(`${prefix}.${extension}`).size > 0);
   execFileSync('/usr/bin/hdiutil', ['verify', '-quiet', `${prefix}.dmg`], {
     timeout: 120000,
@@ -126,7 +128,7 @@ if (!process.argv.includes('--dir')) {
         stdio: 'pipe',
       });
       assert.equal(
-        cdHash(readSignature(join(directory, 'zip', 'Dela.app'))),
+        cdHash(readSignature(join(directory, 'zip', `${appName}.app`))),
         bundleHash,
         'ZIP 内的应用与目录包不一致',
       );
@@ -137,7 +139,7 @@ if (!process.argv.includes('--dir')) {
       );
       try {
         assert.equal(
-          cdHash(readSignature(join(mount, 'Dela.app'))),
+          cdHash(readSignature(join(mount, `${appName}.app`))),
           bundleHash,
           'DMG 内的应用与目录包不一致',
         );

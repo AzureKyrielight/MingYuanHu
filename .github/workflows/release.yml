@@ -99,27 +99,27 @@ jobs:
       - name: Verify signatures, notarization and archives
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: node scripts/verify-macos-package.ts dist/mac-arm64/Dela.app --signed
+        run: node scripts/verify-macos-package.ts "dist/mac-arm64/明远湖光.app" --signed
       - name: Verify update artifacts
         run: |
-          test -f dist/mac-arm64/Dela.app/Contents/Resources/app-update.yml
+          test -f "dist/mac-arm64/明远湖光.app/Contents/Resources/app-update.yml"
           test -f dist/latest-mac.yml || test -f dist/mac-arm64/latest-mac.yml
           # electron-updater 的差量更新按 zip 直链 + .blockmap 探测，缺了就退回全量下载。
-          test -f dist/Dela-*-mac-arm64.zip.blockmap
+          test -f dist/MingYuanHu-*-mac-arm64.zip.blockmap
       - name: Smoke test signed app
-        run: node scripts/ci-smoke.ts "Signed macOS app" dist/mac-arm64/Dela.app/Contents/MacOS/Dela --smoke-test
+        run: node scripts/ci-smoke.ts "Signed macOS app" "dist/mac-arm64/明远湖光.app/Contents/MacOS/明远湖光" --smoke-test
       - name: Record artifact checksums and source
         run: |
           cd dist
-          shasum -a 256 Dela-*-mac-arm64.dmg Dela-*-mac-arm64.zip > SHA256SUMS-mac-arm64
+          shasum -a 256 MingYuanHu-*-mac-arm64.dmg MingYuanHu-*-mac-arm64.zip > SHA256SUMS-mac-arm64
           git rev-parse HEAD > source-commit-mac-arm64.txt
       - uses: actions/upload-artifact@v6
         with:
           name: installer-mac-arm64
           path: |
-            dist/Dela-*-mac-arm64.dmg
-            dist/Dela-*-mac-arm64.zip
-            dist/Dela-*-mac-arm64.zip.blockmap
+            dist/MingYuanHu-*-mac-arm64.dmg
+            dist/MingYuanHu-*-mac-arm64.zip
+            dist/MingYuanHu-*-mac-arm64.zip.blockmap
             dist/latest-mac.yml
             dist/mac-arm64/latest-mac.yml
             dist/SHA256SUMS-mac-arm64
@@ -227,8 +227,8 @@ jobs:
       - name: Verify update artifacts
         run: |
           test -f dist/win-unpacked/resources/app-update.yml
-          test -f "dist/Dela-${RELEASE_TAG#v}-win-x64.exe"
-          test -f "dist/Dela-${RELEASE_TAG#v}-win-x64.exe.blockmap"
+          test -f "dist/MingYuanHu-${RELEASE_TAG#v}-win-x64.exe"
+          test -f "dist/MingYuanHu-${RELEASE_TAG#v}-win-x64.exe.blockmap"
           if [[ "$RELEASE_TAG" != *-* ]]; then test -f dist/latest.yml; fi
         env:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
@@ -237,9 +237,11 @@ jobs:
           cmp vendor/dela-helper/dela-helper-linux-amd64 dist/win-unpacked/resources/dela-helper/dela-helper-linux-amd64
           cmp vendor/dela-helper/dela-helper-linux-arm64 dist/win-unpacked/resources/dela-helper/dela-helper-linux-arm64
       - name: Smoke test packaged app
-        env:
-          PACKAGED_EXECUTABLE: dist/win-unpacked/Dela.exe
-        run: '"$PACKAGED_EXECUTABLE" --smoke-test'
+        # 可执行文件名跟随 productName（明远湖光），不能写死 Dela.exe。
+        run: |
+          exe=$(find dist/win-unpacked -maxdepth 1 -type f -name '*.exe' -print -quit)
+          if [ -z "$exe" ]; then echo 'No packaged executable found'; exit 1; fi
+          "$exe" --smoke-test
       - uses: actions/upload-artifact@v6
         with:
           name: installer-win-x64

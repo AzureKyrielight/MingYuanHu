@@ -68,6 +68,12 @@ jobs:
           cmp vendor/dela-helper/dela-helper-linux-amd64 dist/win-unpacked/resources/dela-helper/dela-helper-linux-amd64
           cmp vendor/dela-helper/dela-helper-linux-arm64 dist/win-unpacked/resources/dela-helper/dela-helper-linux-arm64
       - name: Smoke test packaged app
-        env:
-          PACKAGED_EXECUTABLE: dist/win-unpacked/Dela.exe
-        run: '"$PACKAGED_EXECUTABLE" --smoke-test'
+        # 可执行文件名跟随 productName（明远湖光），不能写死 Dela.exe：
+        # 换名字后这一步会找不到文件，让整个 windows 校验任务红掉。
+        run: |
+          exe=$(find dist/win-unpacked -maxdepth 1 -type f -name '*.exe' -print -quit)
+          if [ -z "$exe" ]; then
+            echo "No packaged executable found in dist/win-unpacked"; ls -la dist/win-unpacked || true; exit 1
+          fi
+          echo "Smoke testing $exe"
+          "$exe" --smoke-test
