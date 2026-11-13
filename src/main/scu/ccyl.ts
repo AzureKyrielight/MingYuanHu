@@ -202,11 +202,14 @@ export function orderedCcylActivities(page = 1, pageSize = 20, name = '') {
 
 export function ccylActivityLibrary(id: string) {
   return get('get-lib-detail', `/app/activity/get-lib-detail/${encodeURIComponent(id)}`).then(
-    (body) => ({
-      activityLib: body.activityLib ?? null,
-      activities: listOf(body, 'activities'),
-      subscribed: body.subscribed === true,
-    }),
+    (body) => {
+      scuDebug('ccyl', `lib-detail keys=${Object.keys(body).join(',')}`);
+      return {
+        activityLib: body.activityLib ?? null,
+        activities: listOf(body, 'activities'),
+        subscribed: body.subscribed === true,
+      };
+    },
   );
 }
 

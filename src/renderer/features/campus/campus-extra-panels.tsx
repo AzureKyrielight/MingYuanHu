@@ -482,6 +482,11 @@ function mapCcylSession(raw: unknown): CcylSessionRow {
   };
 }
 
+interface CcylLibraryState {
+  activities: CcylSessionRow[];
+  subscribed: boolean;
+}
+
 export function CcylPanel() {
   const [keyword, setKeyword] = useState('');
   const [rows, setRows] = useState<CcylActivityRow[]>([]);
@@ -491,7 +496,7 @@ export function CcylPanel() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [openLibrary, setOpenLibrary] = useState<string | null>(null);
-  const [sessions, setSessions] = useState<Record<string, CcylSessionRow[]>>({});
+  const [libraries, setLibraries] = useState<Record<string, CcylLibraryState>>({});
   const [sessionBusy, setSessionBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -522,7 +527,7 @@ export function CcylPanel() {
     void load();
   }, [load]);
 
-  /** 活动库行本身没有场次 id，展开后按场次报名。 */
+  /** 活动库行本身没有场次 id，展开后按场次报名；没有场次的活动库报名即订阅。 */
   const toggleSessions = async (row: CcylActivityRow) => {
     const libraryId = row.libraryId || row.id;
     if (!libraryId) return;
@@ -531,7 +536,7 @@ export function CcylPanel() {
       return;
     }
     setOpenLibrary(libraryId);
-    if (sessions[libraryId]) return;
+    if (libraries[libraryId]) return;
     setSessionBusy(libraryId);
     setError(null);
     try {
@@ -542,9 +547,36 @@ export function CcylPanel() {
       }
       const data = isRecord(result.data) ? result.data : {};
       const list = Array.isArray(data.activities) ? data.activities : [];
-      setSessions((current) => ({ ...current, [libraryId]: list.map(mapCcylSession) }));
+      setLibraries((current) => ({
+        ...current,
+        [libraryId]: { activities: list.map(mapCcylSession), subscribed: data.subscribed === true },
+      }));
     } finally {
       setSessionBusy(null);
+    }
+  };
+
+  const toggleSubscribe = async (libraryId: string) => {
+    const current = libraries[libraryId];
+    if (!current) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = current.subscribed
+        ? await window.dela!.scu.ccylUnsubscribe(libraryId)
+        : await window.dela!.scu.ccylSubscribe(libraryId);
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      setLibraries((all) => ({
+        ...all,
+        [libraryId]: { ...current, subscribed: !current.subscribed },
+      }));
+      setNotice(current.subscribed ? '已取消订阅' : '已订阅，可在「我参与的」查看');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -621,7 +653,8 @@ export function CcylPanel() {
           {rows.map((row) => {
             const libraryId = row.libraryId || row.id;
             const expandable = mode === 'search' && Boolean(libraryId);
-            const list = sessions[libraryId] ?? [];
+            const library = libraries[libraryId];
+            const list = library?.activities ?? [];
             return (
               <li className="py-2" key={row.id || libraryId}>
                 <div className="flex items-center justify-between gap-3">
@@ -663,7 +696,17 @@ export function CcylPanel() {
                 {expandable && openLibrary === libraryId ? (
                   <ul className="mt-2 grid gap-1 border-l border-line pl-3 text-xs">
                     {list.length === 0 && sessionBusy !== libraryId ? (
-                      <li className="text-ink-3">该活动暂无场次</li>
+                      <li className="flex items-center justify-between gap-3">
+                        <span className="text-ink-3">该活动没有固定场次，报名即订阅活动库</span>
+                        <Button
+                          disabled={busy || !library}
+                          onClick={() => void toggleSubscribe(libraryId)}
+                          size="sm"
+                          variant={library?.subscribed ? 'ghost' : 'secondary'}
+                        >
+                          {library?.subscribed ? '取消订阅' : '订阅'}
+                        </Button>
+                      </li>
                     ) : null}
                     {list.map((session) => (
                       <li className="flex items-center justify-between gap-3" key={session.id}>
