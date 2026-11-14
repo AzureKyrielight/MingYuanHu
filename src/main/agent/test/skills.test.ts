@@ -34,6 +34,7 @@ vi.mock('../packages', () => ({
 }));
 import {
   completeCapabilitySetup,
+  ensureBuiltinSkills,
   needsCapabilitySetup,
   effectiveDisabledSkills,
   listSkills,
@@ -41,6 +42,16 @@ import {
   readDisabledSkills,
   setSkillEnabled,
 } from '../skills';
+
+it('内置校园 Skill 的按需参考随应用写入，入口链接可读取', () => {
+  ensureBuiltinSkills();
+  const directory = join(home, '.dela', 'skills', 'scu');
+  const entry = readFileSync(join(directory, 'SKILL.md'), 'utf8');
+  for (const name of ['queries.md', 'actions.md']) {
+    expect(entry).toContain(`references/${name}`);
+    expect(readFileSync(join(directory, 'references', name), 'utf8').length).toBeGreaterThan(0);
+  }
+});
 
 function writeSkill(dir: string, name: string) {
   const path = join(dir, name, 'SKILL.md');
