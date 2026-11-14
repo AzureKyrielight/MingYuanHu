@@ -9,7 +9,7 @@ import { workspaceTools } from './domain/workspace';
 import { readResourceTool } from './domain/read-resource';
 import { prepareDocumentResource, releaseDocumentResource } from '../resources';
 import { resourceRefSchema } from '../../shared/resources';
-import { tool } from './domain/shared';
+import { tool, ToolError } from './domain/shared';
 import type { AgentTool } from './domain/shared';
 
 // 这些是 shell 的业务命令，不常驻模型工具表；复用应用已有的缓存、登录与操作边界。
@@ -54,21 +54,31 @@ const commands: Record<string, AgentTool> = Object.assign(
   ...commandDomains.map((domain) => domain.commands),
 );
 
+const helpSchema = z
+  .object({
+    command: z.string().optional(),
+    domain: z.enum(['scu', 'mail', 'timetable', 'todo', 'workspace']).optional(),
+    summary: z.boolean().default(false),
+  })
+  .strict();
+
 async function executeDomainCommand(name: string, input: unknown) {
   if (name === 'help') {
-    const selected =
-      typeof input === 'object' && input !== null && 'command' in input
-        ? String(input.command)
-        : '';
-    return Object.entries(commands)
+    const { command: selected, domain, summary } = helpSchema.parse(input);
+    const entries = domain
+      ? Object.entries(commandDomains.find((item) => item.name === domain)!.commands)
+      : Object.entries(commands);
+    return entries
       .filter(([name]) => !selected || name === selected)
       .map(([name, command]) => ({
         name,
-        description: command.description,
-        parameters: z.toJSONSchema(command.schema, { io: 'input' }),
+        description: summary ? command.description.split('。')[0] : command.description,
+        ...(!summary && { parameters: z.toJSONSchema(command.schema, { io: 'input' }) }),
       }));
   }
-  if (!Object.hasOwn(commands, name)) throw new Error(`命令不存在：${name}，请使用 dela help`);
+  if (!Object.hasOwn(commands, name)) {
+    throw new ToolError('NOT_FOUND', `命令不存在：${name}，请使用 dela help`);
+  }
   return commands[name]!.execute(input);
 }
 
@@ -85,6 +95,7 @@ export async function startDomainBridge() {
       response.writeHead(403).end(JSON.stringify({ ok: false, error: '请求不可用' }));
       return;
     }
+    let commandName: string | undefined;
     try {
       let body = '';
       for await (const chunk of request) {
@@ -95,11 +106,40 @@ export async function startDomainBridge() {
         .object({ command: z.string().min(1), input: z.unknown().default({}) })
         .strict()
         .parse(JSON.parse(body));
+      commandName = parsed.command;
       const result = await executeDomainCommand(parsed.command, parsed.input);
       response.end(JSON.stringify({ ok: true, result }));
     } catch (error) {
+      if (error instanceof z.ZodError) {
+        const schema =
+          commandName === 'help'
+            ? helpSchema
+            : commandName && Object.hasOwn(commands, commandName)
+              ? commands[commandName]!.schema
+              : undefined;
+        response.end(
+          JSON.stringify({
+            ok: false,
+            error: '命令参数无效',
+            code: 'INVALID_INPUT',
+            issues: error.issues.map(({ path, message }) => ({ path, message })),
+            ...(schema && { parameters: z.toJSONSchema(schema, { io: 'input' }) }),
+            hint: '按 parameters 修正参数后重试，不要重复相同输入。',
+          }),
+        );
+        return;
+      }
       response.end(
-        JSON.stringify({ ok: false, error: error instanceof Error ? error.message : '命令失败' }),
+        JSON.stringify({
+          ok: false,
+          error: error instanceof Error ? error.message : '命令失败',
+          ...(error instanceof ToolError && { code: error.code }),
+          ...(error instanceof ToolError &&
+            error.code === 'AUTH_EXPIRED' && {
+              retryable: false,
+              hint: '停止重试；请用户点击左下角“校园登录”，完成认证后再查询。',
+            }),
+        }),
       );
     }
   });

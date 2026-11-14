@@ -50,16 +50,18 @@ import {
   scuPasspointAdd,
   scuPasspointCancel,
 } from '../../../scu/api';
-import { tool } from '../shared';
+import { tool, toolError } from '../shared';
 
 async function unwrap<T>(pending: Promise<ScuResult<T>>): Promise<T> {
   const result = await pending;
   if (!result.ok) {
-    throw new Error(
-      result.auth
-        ? `${result.error}（请提示用户到“校园服务”页重新连接统一身份认证）`
-        : result.error,
-    );
+    if (result.auth) {
+      throw toolError(
+        'AUTH_EXPIRED',
+        `${result.error}（请提示用户到“校园服务”页重新连接统一身份认证）`,
+      );
+    }
+    throw new Error(result.error);
   }
   return result.data;
 }
@@ -375,7 +377,7 @@ export const scuCcylCreditsTool = tool(
 );
 
 export const scuCcylSignUpTool = tool(
-  '报名第二课堂活动（写操作）。activityId 取自 scu_ccyl_activities；scoreType 为空时按服务端默认可选类型提交。',
+  '报名第二课堂活动（写操作，需用户确认）。activityId 必须是已确认的场次 ID，不能直接使用 scu_ccyl_activities 的活动库 ID；无法确认场次时请用户在界面办理。scoreType 为空时按服务端默认可选类型提交。',
   z
     .object({
       activityId: z.string().trim().min(1).max(64),
