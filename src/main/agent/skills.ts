@@ -21,6 +21,8 @@ import documentScript from './skills/document-reading/scripts/read.py?raw';
 import scuSkill from './skills/scu/SKILL.md?raw';
 import scuQueries from './skills/scu/references/queries.md?raw';
 import scuActions from './skills/scu/references/actions.md?raw';
+import academicSkill from './skills/academic-writing/SKILL.md?raw';
+import academicCoursePaper from './skills/academic-writing/references/course-paper.md?raw';
 import mailSkill from './skills/mail/SKILL.md?raw';
 import todoSkill from './skills/todo/SKILL.md?raw';
 
@@ -60,6 +62,10 @@ const BUILTIN_SKILLS: Readonly<Record<string, { path: string; content: string }[
     { path: SKILL_ENTRY_FILE, content: scuSkill },
     { path: 'references/queries.md', content: scuQueries },
     { path: 'references/actions.md', content: scuActions },
+  ],
+  'academic-writing': [
+    { path: SKILL_ENTRY_FILE, content: academicSkill },
+    { path: 'references/course-paper.md', content: academicCoursePaper },
   ],
   mail: [{ path: SKILL_ENTRY_FILE, content: mailSkill }],
   todo: [{ path: SKILL_ENTRY_FILE, content: todoSkill }],

@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
+import { academicTools } from './domain/academic';
 import { mailTools } from './domain/mail';
 import { scuTools } from './domain/scu';
 import { timetableTools } from './domain/timetable';
@@ -27,6 +28,11 @@ const commandDomains = [
     commands: timetableTools,
   },
   { name: 'todo', description: '查询与管理待办', commands: todoTools },
+  {
+    name: 'academic',
+    description: '按学校格式把论文草稿渲染成 DOCX，并维护封面个人信息',
+    commands: academicTools,
+  },
   {
     name: 'workspace',
     description: '管理项目与导入附件；普通文件用 read/write/edit/shell',
@@ -57,7 +63,7 @@ const commands: Record<string, AgentTool> = Object.assign(
 const helpSchema = z
   .object({
     command: z.string().optional(),
-    domain: z.enum(['scu', 'mail', 'timetable', 'todo', 'workspace']).optional(),
+    domain: z.enum(['scu', 'mail', 'timetable', 'todo', 'workspace', 'academic']).optional(),
     summary: z.boolean().default(false),
   })
   .strict();
