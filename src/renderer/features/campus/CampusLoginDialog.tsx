@@ -41,6 +41,7 @@ export function CampusLoginDialog({ open, onOpenChange, onConnected }: CampusLog
 
   const finish = () => {
     onOpenChange(false);
+    window.dispatchEvent(new Event('scu-identity-changed'));
     onConnected();
   };
 
@@ -83,6 +84,7 @@ export function CampusLoginDialog({ open, onOpenChange, onConnected }: CampusLog
   const logout = async () => {
     if (!window.dela) return;
     setIdentity(await window.dela.scu.identityLogout());
+    window.dispatchEvent(new Event('scu-identity-changed'));
   };
 
   return (

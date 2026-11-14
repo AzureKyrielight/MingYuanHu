@@ -79,6 +79,8 @@ import {
   loginWithPasswordAuto,
 } from './identity';
 
+import { clearCcylCache, resetCcylCacheSession, scuCcylSnapshot } from './ccyl-cache';
+
 const codeSchema = z.string().trim().min(1);
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const textSchema = z.string().trim().max(200).default('');
@@ -105,12 +107,41 @@ function openFiles(sender: WebContents, options: OpenDialogOptions) {
 }
 
 export function registerScuIpc(): void {
-  ipcMain.handle('scu:connect', (event) => connectScu(event.sender));
-  ipcMain.handle('scu:disconnect', () => disconnectScu());
+  ipcMain.handle('scu:connect', async (event) => {
+    resetCcylCacheSession();
+    const result = await connectScu(event.sender);
+    resetCcylCacheSession();
+    return result;
+  });
+  ipcMain.handle('scu:disconnect', () => {
+    resetCcylCacheSession();
+    return disconnectScu();
+  });
+  ipcMain.handle('scu:ccyl-snapshot', (_event, input: unknown) =>
+    scuCcylSnapshot(
+      z
+        .discriminatedUnion('kind', [
+          z
+            .object({
+              kind: z.literal('search'),
+              name: optionalTextSchema,
+              offline: z.boolean().optional(),
+            })
+            .strict(),
+          z.object({ kind: z.literal('mine'), offline: z.boolean().optional() }).strict(),
+          z
+            .object({ kind: z.literal('library'), id: codeSchema, offline: z.boolean().optional() })
+            .strict(),
+        ])
+        .parse(input),
+    ),
+  );
+  ipcMain.handle('scu:ccyl-clear-cache', () => clearCcylCache());
   ipcMain.handle('scu:state', () => scuState());
   ipcMain.handle('scu:identity-state', () => identityState());
   ipcMain.handle('scu:identity-captcha', () => fetchLoginCaptcha());
   ipcMain.handle('scu:identity-login', async (_event, input: unknown) => {
+    resetCcylCacheSession();
     const state = await loginWithPassword(
       z
         .object({
@@ -122,15 +153,18 @@ export function registerScuIpc(): void {
         .strict()
         .parse(input),
     );
+    resetCcylCacheSession();
     resetScuSubsystems();
     return state;
   });
   ipcMain.handle('scu:identity-logout', () => {
     clearIdentity();
+    resetCcylCacheSession();
     resetScuSubsystems();
     return identityState();
   });
   ipcMain.handle('scu:identity-login-auto', async (_event, input: unknown) => {
+    resetCcylCacheSession();
     const state = await loginWithPasswordAuto(
       z
         .object({
@@ -140,6 +174,7 @@ export function registerScuIpc(): void {
         .strict()
         .parse(input),
     );
+    resetCcylCacheSession();
     resetScuSubsystems();
     return state;
   });

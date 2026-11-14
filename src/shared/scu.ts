@@ -194,7 +194,22 @@ export interface ScuRepairSubmitInput {
   readonly images?: readonly string[];
 }
 
+export interface ScuCcylSnapshot {
+  readonly syncedAt: string;
+  readonly offline: boolean;
+  readonly persisted?: boolean;
+  readonly data:
+    readonly unknown[] | { readonly activities: readonly unknown[]; readonly subscribed: boolean };
+}
+
 export interface ScuApi {
+  ccylSnapshot(input: {
+    kind: 'search' | 'mine' | 'library';
+    name?: string;
+    id?: string;
+    offline?: boolean;
+  }): Promise<ScuResult<ScuCcylSnapshot>>;
+  ccylClearCache(): Promise<ScuResult<null>>;
   /** 打开川大统一身份认证窗口；成功后校园会话与其他子站 SSO 一并可用。 */
   connect(): Promise<{ ok: true } | { ok: false; error: string }>;
   disconnect(): Promise<void>;

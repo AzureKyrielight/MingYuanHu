@@ -2,7 +2,7 @@
  * 校园服务的扩展面板：办事大厅动态表单、第二课堂、在线报修、无感认证、云打印上传。
  * 与 CampusServicesView 共用同一套视觉语言（Panel 结构在本地重建，避免循环依赖）。
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CalendarClock,
   ExternalLink,
@@ -449,7 +449,11 @@ function mapCcylActivity(raw: unknown): CcylActivityRow {
   return {
     id: textOf(activity.id) || textOf(value.activityId),
     libraryId: textOf(activity.activityLibraryId) || textOf(value.activityLibraryId),
-    name: textOf(activity.name) || textOf(activity.title) || '未命名活动',
+    name:
+      textOf(activity.name) ||
+      textOf(activity.activityName) ||
+      textOf(activity.title) ||
+      '未命名活动',
     org: textOf(activity.orgName) || textOf(activity.organizationName),
     time: textOf(activity.startTime) || textOf(activity.activityTime),
     status: textOf(value.status) || textOf(activity.status),
@@ -488,7 +492,23 @@ interface CcylLibraryState {
 }
 
 export function CcylPanel() {
+  const [identityVersion, setIdentityVersion] = useState(0);
+  useEffect(() => {
+    const reset = () => setIdentityVersion((value) => value + 1);
+    window.addEventListener('scu-identity-changed', reset);
+    return () => window.removeEventListener('scu-identity-changed', reset);
+  }, []);
+  return <CcylAccountPanel key={identityVersion} />;
+}
+
+function CcylAccountPanel() {
+  const [offline, setOffline] = useState(false);
+  const [syncedAt, setSyncedAt] = useState<string | null>(null);
+  const [cached, setCached] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
   const [keyword, setKeyword] = useState('');
+  const [submittedKeyword, setSubmittedKeyword] = useState('');
+  const requestId = useRef(0);
   const [rows, setRows] = useState<CcylActivityRow[]>([]);
   const [mode, setMode] = useState<'search' | 'mine' | 'credit'>('search');
   const [credits, setCredits] = useState<Record<string, unknown>[]>([]);
@@ -500,31 +520,47 @@ export function CcylPanel() {
   const [sessionBusy, setSessionBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    const request = ++requestId.current;
     setBusy(true);
     setError(null);
+    setRows([]);
+    setLibraries({});
+    setOpenLibrary(null);
+    setSyncedAt(null);
     try {
       if (mode === 'credit') {
         const result = await window.dela!.scu.ccylCredits(1);
+        if (request !== requestId.current) return;
         if (!result.ok) setError(result.error);
         else setCredits((result.data as unknown[]).filter(isRecord));
         return;
       }
-      const result =
-        mode === 'mine'
-          ? await window.dela!.scu.ccylMine(1)
-          : await window.dela!.scu.ccylSearch({ name: keyword, page: 1 });
+      const result = await window.dela!.scu.ccylSnapshot({
+        kind: mode,
+        ...(mode === 'search' ? { name: submittedKeyword } : {}),
+        offline,
+      });
+      if (request !== requestId.current) return;
       if (!result.ok) {
-        setError(result.error);
+        setError(result.auth ? `${result.error}（请重新登录）` : result.error);
         return;
       }
-      setRows((result.data as unknown[]).map(mapCcylActivity));
+      setRows((result.data.data as readonly unknown[]).map(mapCcylActivity));
+      setSyncedAt(result.data.syncedAt);
+      setCached(result.data.offline);
+      if (result.data.persisted === false) setError('已获取最新数据，但本地缓存保存失败');
+    } catch {
+      if (request === requestId.current) setError('读取失败，请重试或选择离线查看');
     } finally {
-      setBusy(false);
+      if (request === requestId.current) setBusy(false);
     }
-  }, [keyword, mode]);
+  }, [submittedKeyword, mode, offline]);
 
   useEffect(() => {
     void load();
+    return () => {
+      requestId.current += 1;
+    };
   }, [load]);
 
   /** 活动库行本身没有场次 id，展开后按场次报名；没有场次的活动库报名即订阅。 */
@@ -539,20 +575,29 @@ export function CcylPanel() {
     if (libraries[libraryId]) return;
     setSessionBusy(libraryId);
     setError(null);
+    const request = requestId.current;
     try {
-      const result = await window.dela!.scu.ccylLibrary(libraryId);
+      const result = await window.dela!.scu.ccylSnapshot({
+        kind: 'library',
+        id: libraryId,
+        offline,
+      });
+      if (request !== requestId.current) return;
       if (!result.ok) {
         setError(result.error);
         return;
       }
-      const data = isRecord(result.data) ? result.data : {};
+      const data: Record<string, unknown> = isRecord(result.data.data) ? result.data.data : {};
       const list = Array.isArray(data.activities) ? data.activities : [];
+      setSyncedAt(result.data.syncedAt);
       setLibraries((current) => ({
         ...current,
         [libraryId]: { activities: list.map(mapCcylSession), subscribed: data.subscribed === true },
       }));
+    } catch {
+      if (request === requestId.current) setError('场次读取失败，请重试');
     } finally {
-      setSessionBusy(null);
+      if (request === requestId.current) setSessionBusy(null);
     }
   };
 
@@ -603,20 +648,63 @@ export function CcylPanel() {
     <Section
       title="第二课堂"
       actions={
-        <Button disabled={busy} onClick={() => void load()} size="sm" variant="ghost">
-          <RefreshCw className={cn('size-4', busy && 'animate-spin')} />
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            disabled={busy || sessionBusy !== null}
+            onClick={() => {
+              if (offline) setOffline(false);
+              else void load();
+            }}
+            size="sm"
+            variant="ghost"
+            aria-label="刷新第二课堂"
+          >
+            <RefreshCw className={cn('size-4', busy && 'animate-spin')} />
+          </Button>
+          <Button
+            disabled={busy || sessionBusy !== null}
+            onClick={async () => {
+              if (!confirmClear) {
+                setConfirmClear(true);
+                return;
+              }
+              const result = await window.dela!.scu.ccylClearCache();
+              setConfirmClear(false);
+              if (!result.ok) {
+                setError(result.error);
+                return;
+              }
+              setRows([]);
+              setLibraries({});
+              setOpenLibrary(null);
+              setSyncedAt(null);
+              setNotice('已清除此账号的第二课堂缓存');
+            }}
+            size="sm"
+            variant="ghost"
+          >
+            {confirmClear ? '确认清除' : '清除缓存'}
+          </Button>
+          {confirmClear ? (
+            <Button onClick={() => setConfirmClear(false)} size="sm" variant="ghost">
+              取消
+            </Button>
+          ) : null}
+        </div>
       }
     >
       <div className="flex flex-wrap items-center gap-2">
         <select
           className="h-9 rounded-md border border-line bg-surface px-2 text-sm text-ink"
+          disabled={busy || sessionBusy !== null}
           onChange={(event) => setMode(event.target.value as typeof mode)}
           value={mode}
         >
           <option value="search">活动库</option>
           <option value="mine">我参与的</option>
-          <option value="credit">学分</option>
+          <option value="credit" disabled={offline}>
+            学分
+          </option>
         </select>
         {mode === 'search' ? (
           <>
@@ -626,12 +714,35 @@ export function CcylPanel() {
               placeholder="活动名称"
               value={keyword}
             />
-            <Button onClick={() => void load()} size="sm" variant="secondary">
+            <Button
+              disabled={busy || sessionBusy !== null}
+              onClick={() => {
+                if (keyword === submittedKeyword) void load();
+                else setSubmittedKeyword(keyword);
+              }}
+              size="sm"
+              variant="secondary"
+            >
               搜索
             </Button>
           </>
         ) : null}
       </div>
+      <label className="flex items-center gap-2 text-xs text-ink-3">
+        <input
+          type="checkbox"
+          checked={offline}
+          disabled={busy || sessionBusy !== null || mode === 'credit'}
+          onChange={(event) => setOffline(event.target.checked)}
+        />
+        离线查看（仅当前已登录账号）
+      </label>
+      {syncedAt ? (
+        <p className="text-xs text-ink-3">
+          {cached ? '本地快照 · ' : ''}同步于 {new Date(syncedAt).toLocaleString()}
+          {cached ? ' · 报名状态可能已变化，刷新后操作' : ''}
+        </p>
+      ) : null}
       <ErrorLine message={error} />
       {notice ? <p className="text-xs text-green">{notice}</p> : null}
       {mode === 'credit' ? (
@@ -679,7 +790,7 @@ export function CcylPanel() {
                     </Button>
                   ) : (
                     <Button
-                      disabled={busy || !row.id}
+                      disabled={busy || offline || !row.id}
                       onClick={() =>
                         void window.dela!.scu.ccylCancel(row.id).then((result) => {
                           if (!result.ok) setError(result.error);
@@ -699,7 +810,7 @@ export function CcylPanel() {
                       <li className="flex items-center justify-between gap-3">
                         <span className="text-ink-3">该活动没有固定场次，报名即订阅活动库</span>
                         <Button
-                          disabled={busy || !library}
+                          disabled={busy || offline || !library}
                           onClick={() => void toggleSubscribe(libraryId)}
                           size="sm"
                           variant={library?.subscribed ? 'ghost' : 'secondary'}
@@ -719,7 +830,7 @@ export function CcylPanel() {
                           </p>
                         </div>
                         <Button
-                          disabled={busy || !session.id || !session.open}
+                          disabled={busy || offline || !session.id || !session.open}
                           onClick={() => void signUpSession(libraryId, session)}
                           size="sm"
                           title={session.open ? undefined : '不在报名时间内'}

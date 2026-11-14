@@ -14,6 +14,8 @@ import type {
 } from '../shared/scu';
 
 export const scu: ScuApi = {
+  ccylSnapshot: (input) => ipcRenderer.invoke('scu:ccyl-snapshot', input),
+  ccylClearCache: () => ipcRenderer.invoke('scu:ccyl-clear-cache'),
   connect: () => ipcRenderer.invoke('scu:connect'),
   disconnect: () => ipcRenderer.invoke('scu:disconnect'),
   state: () => ipcRenderer.invoke('scu:state'),
