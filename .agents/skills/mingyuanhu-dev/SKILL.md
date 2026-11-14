@@ -101,6 +101,9 @@ corepack pnpm exec vitest run --maxWorkers=4
 
 ## 6. 发布
 
+**推送、打 tag、创建 Release 只在用户明确要求时执行。** 改完代码、跑完测试、提交完
+commit 就停；tag 会触发公开 Release CI，不经同意不得推。
+
 ```powershell
 corepack pnpm version:patch                     # 或 manual 改 package.json
 # 手写 CHANGELOG.md 的 `## <版本> - <日期>`，条目面向用户、动词开头
@@ -120,6 +123,8 @@ git push origin main; git push origin vx.y.z    # 推 tag 触发 windows-release
 
 ## 7. 硬规则
 
+- **默认停在本地**：不 `push`、不打 `tag`、不建 Release；只有用户明确说“推送/发布”才做，
+  且推送前先把门禁跑绿、把要推的 commit 列给用户确认。
 - 含中文的文件只用编辑工具改；**绝不**用 PowerShell `Get-Content/Set-Content`（会按 ANSI 写坏）。
 - 不提交诊断探针、运行日志、凭据；`.tools/`、`HANDOFF.md` 已在 `.gitignore`。
 - 提交按主题拆分；CHANGELOG 只写用户可见变化，不抄 commit 列表。
