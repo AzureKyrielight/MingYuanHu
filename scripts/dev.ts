@@ -29,10 +29,23 @@ async function restart() {
     if (stopping) return;
     const current = spawn(
       electron,
-      ['.', ...(process.argv.includes('--smoke-test') ? ['--smoke-test'] : [])],
+      [
+        // 本机沙箱/权限组合下 Electron 可能以 STATUS_BREAKPOINT 静默退出，禁用沙箱是开发默认。
+        '--no-sandbox',
+        '.',
+        ...(process.argv.includes('--smoke-test') ? ['--smoke-test'] : []),
+      ],
       {
         stdio: 'inherit',
-        env: { ...process.env, DELA_DEV_URL: 'http://127.0.0.1:5173' },
+        // DSH/自动化环境会注入 ELECTRON_RUN_AS_NODE=1；原样继承会让 Electron 按 Node 运行
+        // （主进程报 “Cannot read properties of undefined (reading 'requestSingleInstanceLock')”），
+        // 所以显式 delete 该变量，而不是设为空串（空串仍会被 Electron 当真值）。
+        env: (() => {
+          const next = { ...process.env } as Record<string, string | undefined>;
+          delete next.ELECTRON_RUN_AS_NODE;
+          next.DELA_DEV_URL = 'http://127.0.0.1:5173';
+          return next;
+        })(),
       },
     );
     child = current;
