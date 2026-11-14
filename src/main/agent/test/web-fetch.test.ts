@@ -1,4 +1,4 @@
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -21,7 +21,15 @@ vi.mock('../../mail/api', () => ({}));
 vi.mock('../../shuiyuan/api', () => ({}));
 vi.mock('../../storage', () => ({}));
 
-afterEach(() => vi.unstubAllGlobals());
+let testTime = Date.now();
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime((testTime += 6 * 60 * 1000));
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
 afterAll(() => rm(profile.root, { recursive: true, force: true }));
 
 describe('web_fetch', () => {
@@ -286,6 +294,155 @@ describe('web_fetch', () => {
     const page = await fetchWebPage('https://example.com/page', 0, { apiKey: 'sk-test' });
     expect(page.text).toContain('本地正文');
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('续读复用快照与抓取时间，支持小页、刷新与过期', async () => {
+    const fetch = vi
+      .fn()
+      .mockImplementation(
+        async () => new Response('abcdefghij', { headers: { 'content-type': 'text/plain' } }),
+      );
+    vi.stubGlobal('fetch', fetch);
+    const first = await fetchWebPage('https://example.com/snapshot', 0, undefined, { maxChars: 4 });
+    vi.setSystemTime(Date.now() + 1000);
+    const second = await fetchWebPage(
+      'https://example.com/snapshot#section',
+      first.nextOffset!,
+      undefined,
+      { maxChars: 4 },
+    );
+    expect(first.text + second.text).toBe('abcdefgh');
+    expect(first.cache?.status).toBe('miss');
+    expect(second.cache?.status).toBe('hit');
+    expect(second.source.fetchedAt).toBe(first.source.fetchedAt);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const refreshed = await fetchWebPage('https://example.com/snapshot', 0, undefined, {
+      refresh: true,
+    });
+    expect(refreshed.cache?.status).toBe('bypass');
+    expect(refreshed.source.fetchedAt).not.toBe(first.source.fetchedAt);
+    vi.setSystemTime(Date.now() + 6 * 60 * 1000);
+    expect((await fetchWebPage('https://example.com/snapshot')).cache?.status).toBe('miss');
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([false, true])('旧请求晚完成不覆盖刷新快照，旧请求 refresh=%s', async (refresh) => {
+    let resolveOld!: (response: Response) => void;
+    let resolveNew!: (response: Response) => void;
+    const fetch = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveOld = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveNew = resolve;
+          }),
+      );
+    vi.stubGlobal('fetch', fetch);
+    const old = fetchWebPage('https://example.com/refresh-race', 0, undefined, { refresh });
+    const newer = fetchWebPage('https://example.com/refresh-race', 0, undefined, { refresh: true });
+    resolveNew(new Response('new snapshot', { headers: { 'content-type': 'text/plain' } }));
+    await newer;
+    resolveOld(new Response('old snapshot', { headers: { 'content-type': 'text/plain' } }));
+    expect((await old).text).toBe('old snapshot');
+    const cached = await fetchWebPage('https://example.com/refresh-race');
+    expect(cached.text).toBe('new snapshot');
+    expect(cached.cache?.status).toBe('hit');
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('并发请求合并正文但各自分页，凭据与本地模式不共用快照', async () => {
+    const fetch = vi
+      .fn()
+      .mockImplementation(
+        async () => new Response(JSON.stringify({ title: '文章', content: 'abcdefghij' })),
+      );
+    vi.stubGlobal('fetch', fetch);
+    const [first, second] = await Promise.all([
+      fetchWebPage('https://example.com/shared', 0, { apiKey: 'fake-a' }, { maxChars: 4 }),
+      fetchWebPage('https://example.com/shared', 4, { apiKey: 'fake-a' }, { maxChars: 4 }),
+    ]);
+    expect(first.text + second.text).toBe('abcdefgh');
+    expect(second.cache?.status).toBe('shared');
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await fetchWebPage('https://example.com/shared', 0, { apiKey: 'fake-b' });
+    await fetchWebPage('https://example.com/shared');
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(JSON.stringify(first)).not.toContain('fake-a');
+  });
+
+  it.each([
+    ['https://example.com/private', '<p>private body</p>', { 'cache-control': 'private' }],
+    ['https://example.com/cookie', '<p>cookie body</p>', { 'set-cookie': 'session=fake' }],
+    ['https://example.com/login', '<p>Sign in</p>', {}],
+    ['https://example.com/challenge', '<title>Just a moment</title><p>Checking</p>', {}],
+    ['https://example.com/form', '<input type="password"><p>Account</p>', {}],
+    ['https://example.com/article?token=fake', '<p>article</p>', {}],
+  ])('敏感或阻拦页不缓存：%s', async (url, html, headers) => {
+    const fetch = vi
+      .fn()
+      .mockImplementation(
+        async () => new Response(html, { headers: { 'content-type': 'text/html', ...headers } }),
+      );
+    vi.stubGlobal('fetch', fetch);
+    expect((await fetchWebPage(url)).cache?.status).toBe('bypass');
+    await fetchWebPage(url);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('失败不缓存，缓存按条目与总字符数受限', async () => {
+    const fetch = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockImplementation(
+        async () => new Response('x'.repeat(300000), { headers: { 'content-type': 'text/plain' } }),
+      );
+    vi.stubGlobal('fetch', fetch);
+    await expect(fetchWebPage('https://example.com/bounded/0')).rejects.toThrow('offline');
+    for (let i = 0; i < 15; i++) await fetchWebPage(`https://example.com/bounded/${i}`);
+    expect((await fetchWebPage('https://example.com/bounded/0')).cache?.status).toBe('miss');
+    expect(fetch).toHaveBeenCalledTimes(17);
+    fetch.mockImplementation(
+      async () => new Response('small', { headers: { 'content-type': 'text/plain' } }),
+    );
+    for (let i = 0; i < 17; i++)
+      await fetchWebPage(`https://example.com/small/${i}`, 0, undefined, { refresh: true });
+    expect((await fetchWebPage('https://example.com/small/0')).cache?.status).toBe('miss');
+  });
+
+  it('PDF 并发调用创建独立任务，释放后再次调用不会复用旧任务', async () => {
+    const fetch = vi
+      .fn()
+      .mockImplementation(
+        async () => new Response('%PDF-1.7', { headers: { 'content-type': 'application/pdf' } }),
+      );
+    vi.stubGlobal('fetch', fetch);
+    const [first, second] = await Promise.all([
+      fetchWebPage('https://example.com/independent.pdf'),
+      fetchWebPage('https://example.com/independent.pdf'),
+    ]);
+    expect(first.document!.jobId).not.toBe(second.document!.jobId);
+    await releaseDocumentResource(first.document!.jobId);
+    await releaseDocumentResource(second.document!.jobId);
+    const third = await fetchWebPage('https://example.com/independent.pdf');
+    expect(third.document!.jobId).not.toBe(first.document!.jobId);
+    await releaseDocumentResource(third.document!.jobId);
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('分页参数在请求前验证', async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    await expect(fetchWebPage('https://example.com', -1)).rejects.toThrow('offset');
+    await expect(
+      fetchWebPage('https://example.com', 0, undefined, { maxChars: 0 }),
+    ).rejects.toThrow('maxChars');
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('PDF 直链不经过 DeepSeek，仍走文档流程', async () => {

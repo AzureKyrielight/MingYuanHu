@@ -205,6 +205,78 @@ it('没配搜索服务时自动回退到免密钥的必应网页版', async () =
   vi.unstubAllGlobals();
 });
 
+it('缓存合并并按域名过滤结果，同时限制摘要长度', async () => {
+  const html = `<li class="b_algo"><h2><a href="https://example.com/a">A</a></h2><div class="b_caption"><p>${'x'.repeat(700)}</p></div></li>
+    <li class="b_algo"><h2><a href="https://other.test/b">B</a></h2></li>`;
+  const fetchMock = vi.fn().mockResolvedValue(new Response(html));
+  vi.stubGlobal('fetch', fetchMock);
+  const first = await webSearch('缓存测试', 5, undefined, { domains: ['example.com'] });
+  const second = await webSearch('缓存测试', 5, undefined, { domains: ['example.com'] });
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(second.cacheHit).toBe(true);
+  expect(first.results).toHaveLength(1);
+  expect(first.results[0]!.snippet).toHaveLength(500);
+  expect(first.fetchedAt).toBeTypeOf('number');
+  vi.unstubAllGlobals();
+});
+
+it('切换搜索配置不会复用另一供应商的缓存', async () => {
+  const fetchMock = vi.fn().mockImplementation(async () => {
+    const title = fetchMock.mock.calls.length === 1 ? 'A' : 'B';
+    return new Response(
+      JSON.stringify({
+        grounding: { generic: [{ url: `https://${title}.example/a`, title, snippets: ['摘要'] }] },
+      }),
+    );
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  saveWebSearchEntry({ name: 'A', provider: 'brave', apiKey: 'BSA-1' });
+  const first = await webSearch('配置切换', 3);
+  const second = await webSearch('配置切换', 3);
+  expect(second.cacheHit).toBe(true);
+  saveWebSearchEntry({ name: 'B', provider: 'brave', apiKey: 'BSA-2' });
+  const switched = await webSearch('配置切换', 3);
+  expect(switched.cacheHit).toBe(false);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(switched.results).not.toEqual(first.results);
+  vi.unstubAllGlobals();
+});
+
+it('刷新请求不会被旧请求结果覆盖，且刷新期间普通请求复用旧缓存', async () => {
+  let releaseOld!: () => void;
+  let releaseRefresh!: () => void;
+  const oldGate = new Promise<void>((resolve) => {
+    releaseOld = resolve;
+  });
+  const refreshGate = new Promise<void>((resolve) => {
+    releaseRefresh = resolve;
+  });
+  const fetchMock = vi.fn().mockImplementation(async () => {
+    const call = fetchMock.mock.calls.length;
+    if (call === 1) await oldGate;
+    if (call === 2) await refreshGate;
+    const name = call === 1 ? 'old' : 'new';
+    return new Response(
+      `<li class="b_algo"><h2><a href="https://example.com/${name}">结果</a></h2></li>`,
+    );
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  const old = webSearch('刷新测试', 3);
+  await Promise.resolve();
+  const refresh = webSearch('刷新测试', 3, undefined, { refresh: true });
+  await Promise.resolve();
+  releaseRefresh();
+  const fresh = await refresh;
+  expect(fresh.results[0]?.url).toContain('/new');
+  releaseOld();
+  const stale = await old;
+  expect(stale.results[0]?.url).toContain('/old');
+  const after = await webSearch('刷新测试', 3);
+  expect(after.cacheHit).toBe(true);
+  expect(after.results[0]?.url).toContain('/new');
+  vi.unstubAllGlobals();
+});
+
 it('必应回退解析为空时报错并引导手动配置', async () => {
   vi.stubGlobal(
     'fetch',

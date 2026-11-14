@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { getDatabase } from '../database';
 import { loadLlmConfig } from '../credentials';
@@ -17,6 +17,23 @@ const CONFIG_KEY = 'web-search-api';
 const REQUEST_TIMEOUT_MS = 15000;
 // 4 类服务各留多账号余量且列表一屏可浏览；再大主要防配置堆积。
 const ENTRY_LIMIT = 16;
+const SEARCH_CACHE_TTL_MS = 60_000;
+const SEARCH_CACHE_LIMIT = 32;
+const SEARCH_SNIPPET_LIMIT = 500;
+const SEARCH_TITLE_LIMIT = 200;
+
+type SearchOptions = { domains?: string[]; excludeDomains?: string[]; refresh?: boolean };
+type SearchResponse = {
+  query: string;
+  provider: string;
+  results: WebSearchResult[];
+  fallback?: boolean;
+  cacheHit: boolean;
+  fetchedAt: number;
+  latencyMs?: number;
+};
+const searchCache = new Map<string, { response: SearchResponse; expiresAt: number }>();
+const searchInflight = new Map<string, Promise<SearchResponse>>();
 
 // 请求头键限 HTTP token 字符；条数封顶防滥用。
 const headerKeySchema = z.string().regex(/^[\w!#$%&'*+\-.^`|~]{1,128}$/);
@@ -414,19 +431,134 @@ async function searchBingFallback(
 
 /** 联网搜索工具：优先用聊天侧选中的配置；一条都没配时回退到必应网页版（免密钥），
  *  保证新用户第一轮就能联网，而不是被报错拦下。 */
-export async function webSearch(query: string, count = 5, freshness?: string) {
-  const config = readWebSearchConfig();
-  if (!config) {
-    const results = await searchBingFallback(query, count, freshness);
-    return { query, provider: 'bing', fallback: true, results: results.slice(0, count) };
+function normalizeDomains(values: string[] | undefined): string[] {
+  return [
+    ...new Set(
+      (values ?? []).map((value) => value.trim().toLowerCase().replace(/^\.+/, '')).filter(Boolean),
+    ),
+  ].sort();
+}
+
+function hostMatches(url: string, domains: string[]): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return domains.some((domain) => host === domain || host.endsWith(`.${domain}`));
+  } catch {
+    return false;
   }
-  const results =
-    config.provider === 'brave'
+}
+
+function compactResults(
+  results: WebSearchResult[],
+  count: number,
+  options: SearchOptions,
+): WebSearchResult[] {
+  const domains = normalizeDomains(options.domains);
+  const excluded = normalizeDomains(options.excludeDomains);
+  const seen = new Set<string>();
+  return results
+    .filter((result) => {
+      if (!/^https?:\/\//i.test(result.url) || seen.has(result.url)) return false;
+      if (domains.length > 0 && !hostMatches(result.url, domains)) return false;
+      if (excluded.length > 0 && hostMatches(result.url, excluded)) return false;
+      seen.add(result.url);
+      return true;
+    })
+    .slice(0, count)
+    .map((result) => ({
+      url: result.url,
+      title: compact(result.title).slice(0, SEARCH_TITLE_LIMIT),
+      snippet: compact(result.snippet).slice(0, SEARCH_SNIPPET_LIMIT),
+    }));
+}
+
+type SearchConfig = WebSearchEntry | null;
+
+function configFingerprint(config: SearchConfig): string {
+  const safe = config
+    ? Object.fromEntries(
+        Object.entries(config).map(([key, value]) => [
+          key,
+          key.toLowerCase().includes('key') || key === 'headers'
+            ? createHash('sha256').update(JSON.stringify(value)).digest('hex')
+            : value,
+        ]),
+      )
+    : null;
+  return createHash('sha256').update(JSON.stringify(safe)).digest('hex').slice(0, 16);
+}
+
+async function performWebSearch(
+  query: string,
+  count: number,
+  freshness: string | undefined,
+  options: SearchOptions,
+  config: SearchConfig,
+): Promise<SearchResponse> {
+  const startedAt = Date.now();
+  const raw = !config
+    ? await searchBingFallback(query, count, freshness)
+    : config.provider === 'brave'
       ? await searchBrave(query, count, freshness, config.apiKey)
       : config.provider === 'google'
         ? await searchGoogle(query, count, config.apiKey, config.cx)
         : config.provider === 'deepseek'
           ? await searchDeepSeek(query, count, config.apiKey)
           : await searchCustomEndpoint(query, config.url, config.headers);
-  return { query, provider: config.provider, results: results.slice(0, count) };
+  return {
+    query,
+    provider: config?.provider ?? 'bing',
+    ...(config ? {} : { fallback: true }),
+    results: compactResults(raw, count, options),
+    cacheHit: false,
+    fetchedAt: Date.now(),
+    latencyMs: Date.now() - startedAt,
+  };
+}
+
+/** 联网搜索工具。domains/excludeDomains 在本地按 URL 主机名过滤；refresh 跳过缓存。 */
+export async function webSearch(
+  query: string,
+  count = 5,
+  freshness?: string,
+  options: SearchOptions = {},
+): Promise<SearchResponse> {
+  const safeCount = Math.min(10, Math.max(1, Math.floor(count)));
+  const normalizedQuery = query.trim();
+  const config = readWebSearchConfig();
+  const key = JSON.stringify([
+    normalizedQuery,
+    safeCount,
+    freshness ?? '',
+    normalizeDomains(options.domains),
+    normalizeDomains(options.excludeDomains),
+    configFingerprint(config),
+  ]);
+  const now = Date.now();
+  if (!options.refresh) {
+    const cached = searchCache.get(key);
+    if (cached && cached.expiresAt > now) return { ...cached.response, cacheHit: true };
+    searchCache.delete(key);
+    const pending = searchInflight.get(key);
+    if (pending) return { ...(await pending), cacheHit: true };
+  }
+  let pending: Promise<SearchResponse>;
+  pending = performWebSearch(normalizedQuery, safeCount, freshness, options, config).then(
+    (response) => {
+      if (searchInflight.get(key) === pending) {
+        searchInflight.delete(key);
+        searchCache.delete(key);
+        searchCache.set(key, { response, expiresAt: Date.now() + SEARCH_CACHE_TTL_MS });
+        while (searchCache.size > SEARCH_CACHE_LIMIT)
+          searchCache.delete(searchCache.keys().next().value!);
+      }
+      return response;
+    },
+    (error) => {
+      if (searchInflight.get(key) === pending) searchInflight.delete(key);
+      throw error;
+    },
+  );
+  searchInflight.set(key, pending);
+  return pending;
 }

@@ -1,6 +1,7 @@
 import { htmlToMarkdown } from '@mdream/js';
 import { clean } from '@mdream/js/clean';
 import { extractionPlugin, filterPlugin } from '@mdream/js/plugins';
+import { createHash } from 'node:crypto';
 import { open } from 'node:fs/promises';
 import { prepareDocumentFile } from '../resources';
 import { fetchDeepSeek } from './deepseek';
@@ -16,8 +17,15 @@ const MAX_REDIRECTS = 5;
 // 单次返回的字符数；超出部分经 offset 续读，分页本身不截断。
 const TEXT_LIMIT = 20000;
 
+const SNAPSHOT_TTL_MS = 5 * 60 * 1000;
+const SNAPSHOT_LIMIT = 16;
+const SNAPSHOT_CHARACTER_LIMIT = 4 * 1024 * 1024;
+const snapshots = new Map<string, { page: Snapshot; expiresAt: number }>();
+const pending = new Map<string, Promise<Snapshot>>();
+
 interface WebPageContent {
   source: { url: string; fetchedAt: string };
+  cache?: { status: 'hit' | 'miss' | 'shared' | 'bypass'; expiresAt?: string };
   title: string | null;
   contentType: string;
   text: string;
@@ -29,12 +37,103 @@ interface WebPageContent {
   note?: string;
 }
 
+type Snapshot = WebPageContent & { cacheable: boolean };
+
 export async function fetchWebPage(
   rawUrl: string,
   offset = 0,
   deepseek?: { apiKey: string },
+  options?: { maxChars?: number; refresh?: boolean },
 ): Promise<WebPageContent> {
+  const maxChars = options?.maxChars ?? TEXT_LIMIT;
+  if (!Number.isInteger(offset) || offset < 0) throw new Error('offset 必须是非负整数');
+  if (!Number.isInteger(maxChars) || maxChars < 1 || maxChars > TEXT_LIMIT)
+    throw new Error(`maxChars 必须是 1–${TEXT_LIMIT} 的整数`);
+  const url = httpUrl(rawUrl);
+  url.hash = '';
+  const sensitiveUrl = Boolean(
+    url.username ||
+    url.password ||
+    url.search ||
+    /\/(?:login|signin|auth|sso)(?:\/|$)/i.test(url.pathname),
+  );
+  const key = createHash('sha256')
+    .update(JSON.stringify([url.toString(), deepseek?.apiKey ?? null]))
+    .digest('hex');
+  const now = Date.now();
+  for (const [storedKey, entry] of snapshots) {
+    if (entry.expiresAt <= now) snapshots.delete(storedKey);
+  }
+  if (options?.refresh) snapshots.delete(key);
+  const bypass = sensitiveUrl || options?.refresh;
+  const cached = !bypass ? snapshots.get(key) : undefined;
+  let page: Snapshot;
+  let status: NonNullable<WebPageContent['cache']>['status'];
+  let expiresAt = cached?.expiresAt;
+  if (cached) {
+    page = cached.page;
+    snapshots.delete(key);
+    snapshots.set(key, cached);
+    status = 'hit';
+  } else {
+    const inFlight = !bypass ? pending.get(key) : undefined;
+    status = bypass ? 'bypass' : inFlight ? 'shared' : 'miss';
+    const request = inFlight ?? loadWebPage(url.toString(), deepseek);
+    if (!sensitiveUrl && !inFlight && (pending.has(key) || pending.size < SNAPSHOT_LIMIT))
+      pending.set(key, request);
+    let latestRequest = false;
+    try {
+      page = await request;
+      latestRequest = pending.get(key) === request;
+    } finally {
+      if (pending.get(key) === request) pending.delete(key);
+    }
+    // Each PDF caller owns its own releasable document task.
+    if (inFlight && page.document) page = await loadWebPage(url.toString(), deepseek);
+    if (
+      !sensitiveUrl &&
+      page.cacheable &&
+      page.text.length <= SNAPSHOT_CHARACTER_LIMIT &&
+      (latestRequest || snapshots.get(key)?.page === page)
+    ) {
+      expiresAt = Date.parse(page.source.fetchedAt) + SNAPSHOT_TTL_MS;
+      snapshots.delete(key);
+      snapshots.set(key, { page, expiresAt });
+      let characters = 0;
+      for (const entry of snapshots.values()) characters += entry.page.text.length;
+      while (snapshots.size > SNAPSHOT_LIMIT || characters > SNAPSHOT_CHARACTER_LIMIT) {
+        const oldest = snapshots.keys().next().value!;
+        characters -= snapshots.get(oldest)!.page.text.length;
+        snapshots.delete(oldest);
+      }
+    } else {
+      status = 'bypass';
+    }
+  }
+  const { cacheable: _cacheable, ...content } = page;
+  const nextOffset = offset + maxChars < page.text.length ? offset + maxChars : null;
+  const note = [
+    page.note,
+    ...(nextOffset !== null
+      ? [
+          `正文共 ${page.text.length} 字符，本次返回第 ${offset}–${nextOffset} 字符；传 offset=${nextOffset} 续读`,
+        ]
+      : []),
+  ]
+    .filter(Boolean)
+    .join('；');
+  return {
+    ...content,
+    text: page.text.slice(offset, offset + maxChars),
+    nextOffset,
+    cache: { status, ...(expiresAt ? { expiresAt: new Date(expiresAt).toISOString() } : {}) },
+    ...(note ? { note } : {}),
+  };
+}
+
+async function loadWebPage(rawUrl: string, deepseek?: { apiKey: string }): Promise<Snapshot> {
   const fetchedAt = new Date().toISOString();
+  let cacheable = true;
   const finish = (
     url: URL,
     title: string | null,
@@ -42,21 +141,23 @@ export async function fetchWebPage(
     fullText: string,
     bytesTruncated: boolean,
     extraNotes: string[] = [],
-  ): WebPageContent => {
+  ): Snapshot => {
     const notes = [...extraNotes];
     if (bytesTruncated) notes.push('页面超过 2MB 读取上限，内容可能不完整');
-    const nextOffset = offset + TEXT_LIMIT < fullText.length ? offset + TEXT_LIMIT : null;
-    if (nextOffset !== null)
-      notes.push(
-        `正文共 ${fullText.length} 字符，本次返回第 ${offset}–${nextOffset} 字符；传 offset=${nextOffset} 续读`,
-      );
+    const blocked =
+      /(?:sign in|log in|login|access denied|just a moment|verify you are human|captcha|登录|登陆|访问受限|验证码|人机验证)/i;
     return {
+      cacheable:
+        cacheable &&
+        Boolean(fullText.trim()) &&
+        !blocked.test(title ?? '') &&
+        !(fullText.length < 2000 && blocked.test(fullText)),
       source: { url: url.toString(), fetchedAt },
       title,
       contentType,
-      text: fullText.slice(offset, offset + TEXT_LIMIT),
+      text: fullText,
       totalCharacters: fullText.length,
-      nextOffset,
+      nextOffset: null,
       truncated: bytesTruncated,
       ...(notes.length ? { note: notes.join('；') } : {}),
     };
@@ -82,6 +183,15 @@ export async function fetchWebPage(
       },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
+    if (
+      response.headers.has('set-cookie') ||
+      /(?:no-store|private|no-cache)/i.test(response.headers.get('cache-control') ?? '') ||
+      /\/(?:login|signin|auth|sso)(?:\/|$)/i.test(url.pathname) ||
+      url.search ||
+      url.username ||
+      url.password
+    )
+      cacheable = false;
     const location =
       response.status >= 300 && response.status < 400 ? response.headers.get('location') : null;
     if (!location) break;
@@ -120,6 +230,7 @@ export async function fetchWebPage(
   } catch {
     source = new TextDecoder().decode(bytes);
   }
+  if (/<input\b[^>]*\btype\s*=\s*["']?password\b/i.test(source)) cacheable = false;
   const isMarkup = /text\/html|application\/xhtml/i.test(contentType) || !contentType;
   const { title, text } = isMarkup
     ? htmlToPage(source, url.toString())
