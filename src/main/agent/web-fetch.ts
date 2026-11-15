@@ -23,6 +23,15 @@ const SNAPSHOT_CHARACTER_LIMIT = 4 * 1024 * 1024;
 const snapshots = new Map<string, { page: Snapshot; expiresAt: number }>();
 const pending = new Map<string, Promise<Snapshot>>();
 
+// 站点级熔断：某 host 返回访问验证页/人机验证后，短时间内不再对它发起任何请求，
+// 否则 Agent 会换 UA/路径反复打同一堵墙。refresh=true 是显式重试的唯一入口。
+const HOST_BLOCK_TTL_MS = 5 * 60 * 1000;
+type BlockedState = 'challenge' | 'captcha';
+const hostBlocks = new Map<string, { state: BlockedState; until: number }>();
+
+// 一次抓取（含全部重定向跳）共享的总预算；逐跳各自 15s 超时会把单次抓取拖到 90s。
+const TOTAL_BUDGET_MS = 45_000;
+
 interface WebPageContent {
   source: { url: string; fetchedAt: string };
   cache?: { status: 'hit' | 'miss' | 'shared' | 'bypass'; expiresAt?: string };
@@ -32,6 +41,8 @@ interface WebPageContent {
   totalCharacters: number;
   nextOffset: number | null;
   truncated: boolean;
+  /** 访问被站点拦下时的状态；正常页面不返回该字段。 */
+  state?: BlockedState;
   readable?: false;
   document?: Awaited<ReturnType<typeof prepareDocumentFile>>;
   note?: string;
@@ -61,9 +72,26 @@ export async function fetchWebPage(
     .update(JSON.stringify([url.toString(), deepseek?.apiKey ?? null]))
     .digest('hex');
   const now = Date.now();
+  const hostBlock = hostBlocks.get(url.hostname);
+  if (!options?.refresh && hostBlock && hostBlock.until > now) {
+    const reason = hostBlock.state === 'challenge' ? '访问验证页' : '人机验证';
+    return {
+      source: { url: url.toString(), fetchedAt: new Date().toISOString() },
+      title: null,
+      contentType: '',
+      text: '',
+      totalCharacters: 0,
+      nextOffset: null,
+      truncated: false,
+      state: hostBlock.state,
+      cache: { status: 'bypass' },
+      note: `该站点最近返回了${reason}，已跳过重试（refresh=true 可强制再试一次）。请改用搜索结果、站内静态页或请用户提供原文，不要换 UA/代理/路径反复探测同一站点`,
+    };
+  }
   for (const [storedKey, entry] of snapshots) {
     if (entry.expiresAt <= now) snapshots.delete(storedKey);
   }
+  if (hostBlock && hostBlock.until <= now) hostBlocks.delete(url.hostname);
   if (options?.refresh) snapshots.delete(key);
   const bypass = sensitiveUrl || options?.refresh;
   const cached = !bypass ? snapshots.get(key) : undefined;
@@ -88,6 +116,8 @@ export async function fetchWebPage(
     } finally {
       if (pending.get(key) === request) pending.delete(key);
     }
+    if (page.state)
+      hostBlocks.set(url.hostname, { state: page.state, until: Date.now() + HOST_BLOCK_TTL_MS });
     // Each PDF caller owns its own releasable document task.
     if (inFlight && page.document) page = await loadWebPage(url.toString(), deepseek);
     if (
@@ -133,6 +163,7 @@ export async function fetchWebPage(
 
 async function loadWebPage(rawUrl: string, deepseek?: { apiKey: string }): Promise<Snapshot> {
   const fetchedAt = new Date().toISOString();
+  const deadline = Date.now() + TOTAL_BUDGET_MS;
   let cacheable = true;
   const finish = (
     url: URL,
@@ -141,6 +172,7 @@ async function loadWebPage(rawUrl: string, deepseek?: { apiKey: string }): Promi
     fullText: string,
     bytesTruncated: boolean,
     extraNotes: string[] = [],
+    state?: BlockedState,
   ): Snapshot => {
     const notes = [...extraNotes];
     if (bytesTruncated) notes.push('页面超过 2MB 读取上限，内容可能不完整');
@@ -149,6 +181,7 @@ async function loadWebPage(rawUrl: string, deepseek?: { apiKey: string }): Promi
     return {
       cacheable:
         cacheable &&
+        !state &&
         Boolean(fullText.trim()) &&
         !blocked.test(title ?? '') &&
         !(fullText.length < 2000 && blocked.test(fullText)),
@@ -159,11 +192,12 @@ async function loadWebPage(rawUrl: string, deepseek?: { apiKey: string }): Promi
       totalCharacters: fullText.length,
       nextOffset: null,
       truncated: bytesTruncated,
+      ...(state ? { state } : {}),
       ...(notes.length ? { note: notes.join('；') } : {}),
     };
   };
   let url = httpUrl(rawUrl);
-  if (deepseek && !looksLikePdfUrl(url)) {
+  if (deepseek && !looksLikePdfUrl(url) && deadline - Date.now() > REQUEST_TIMEOUT_MS) {
     try {
       const page = await fetchDeepSeek(url.toString(), deepseek.apiKey);
       if (page.text.trim())
@@ -174,6 +208,8 @@ async function loadWebPage(rawUrl: string, deepseek?: { apiKey: string }): Promi
   }
   let response: Response | null = null;
   for (let hop = 0; ; hop += 1) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error('网页抓取超时（建连与重定向总预算耗尽）');
     response = await fetch(url, {
       redirect: 'manual',
       headers: {
@@ -181,7 +217,7 @@ async function loadWebPage(rawUrl: string, deepseek?: { apiKey: string }): Promi
         accept: 'text/html,application/xhtml+xml,application/pdf;q=0.9,*/*;q=0.8',
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
       },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(Math.min(REQUEST_TIMEOUT_MS, remaining)),
     });
     if (
       response.headers.has('set-cookie') ||
@@ -237,17 +273,38 @@ async function loadWebPage(rawUrl: string, deepseek?: { apiKey: string }): Promi
     : { title: null, text: source };
   let normalized = text.replace(/\r\n/g, '\n');
   const notes: string[] = [];
+  let state: BlockedState | undefined;
+  if (isMarkup) {
+    const visibleText = normalized.trim();
+    // WAF 的 JS 挑战页：HTTP 202 且几乎无正文，或页面含混淆的 $_ts 签名。
+    const looksLikeChallenge =
+      (response!.status === 202 && visibleText.length < 500) || /\$_ts\.nsd\s*=/.test(source);
+    const captchaPattern =
+      /captcha|安全验证|人机验证|SourceVerifyCode|verify you are human|验证码/i;
+    if (looksLikeChallenge) {
+      state = 'challenge';
+      notes.push(
+        '站点返回了访问验证页（JavaScript 挑战），未取得正文；同一站点短时间内将跳过重试，请改用搜索结果、站内静态页或请用户提供原文',
+      );
+    } else if (
+      captchaPattern.test(title ?? '') ||
+      (visibleText.length < 2000 && captchaPattern.test(visibleText))
+    ) {
+      state = 'captcha';
+      notes.push('站点要求人机验证，未取得正文；同一站点短时间内将跳过重试');
+    }
+  }
   // 纯客户端渲染的站点（React/Vue 单页应用）HTML 里几乎没有正文，mdream 只能抽到
   // 「Skip to main content」这类骨架；此时补一次粗粒度兜底（正文 + 站内链接），并明确告知
   // 模型原因，避免它把空内容当成「页面没有信息」而结束任务。
-  if (isMarkup && source.length > 2048 && normalized.trim().length < 200) {
+  if (!state && isMarkup && source.length > 2048 && normalized.trim().length < 200) {
     const fallback = rawPageText(source);
     if (fallback.length > normalized.trim().length) normalized = fallback;
     notes.push(
       '该页正文疑似由 JavaScript 动态渲染，HTML 里可提取的文字很少（上面的 text 是兜底抽取，可能只含标题、导航与链接）。需要完整内容时，可改用该站的 sitemap / RSS / 搜索结果的静态页，或检索同一主题的其他来源',
     );
   }
-  return finish(url, title, contentType || 'text/html', normalized, bytesTruncated, notes);
+  return finish(url, title, contentType || 'text/html', normalized, bytesTruncated, notes, state);
 }
 
 async function peekResponse(response: Response) {

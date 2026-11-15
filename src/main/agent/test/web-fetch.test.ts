@@ -457,4 +457,45 @@ describe('web_fetch', () => {
     expect(fetch.mock.calls[0]![0].toString()).toBe('https://example.com/file.pdf');
     await releaseDocumentResource(pdf.document!.jobId);
   });
+
+  it('识别访问验证页，并对同一站点熔断后续请求（refresh 可强制重试）', async () => {
+    const html = `<html><head><title></title></head><body><script>$_ts={};$_ts.nsd=32351;$_ts.cd="aaaa";</script></body></html>`;
+    const fetch = vi
+      .fn()
+      .mockImplementation(
+        async () => new Response(html, { status: 202, headers: { 'content-type': 'text/html' } }),
+      );
+    vi.stubGlobal('fetch', fetch);
+    const first = await fetchWebPage('https://waf-a.example.com/info/1.htm');
+    expect(first.state).toBe('challenge');
+    expect(first.note).toContain('访问验证页');
+    expect(first.cache?.status).toBe('bypass');
+    const second = await fetchWebPage('https://waf-a.example.com/info/2.htm');
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(second.state).toBe('challenge');
+    expect(second.note).toContain('跳过重试');
+    const forced = await fetchWebPage('https://waf-a.example.com/info/2.htm', 0, undefined, {
+      refresh: true,
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(forced.state).toBe('challenge');
+  });
+
+  it('识别人机验证页并标记 state 与不缓存', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(
+            '<html><head><title>搜狗搜索</title></head><body><p>SourceVerifyCode：abc<br />此验证码用于确认这些请求是您的正常行为而不是自动程序发出的</p></body></html>',
+            { headers: { 'content-type': 'text/html' } },
+          ),
+        ),
+    );
+    const page = await fetchWebPage('https://captcha-a.example.com/web');
+    expect(page.state).toBe('captcha');
+    expect(page.note).toContain('人机验证');
+    expect(page.cache?.status).toBe('bypass');
+  });
 });
