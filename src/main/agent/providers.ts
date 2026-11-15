@@ -163,6 +163,26 @@ export function saveLlmProvider(input: unknown): LlmProviderView {
   return viewOf(provider);
 }
 
+/** 会话里选用了厂商默认档位时写回模型配置：设置页与之后的会话才看得见、沿用它。 */
+export function enableModelEffortLevels(
+  providerId: string,
+  model: string,
+  levels: string[],
+  effort: string,
+): void {
+  const config = loadLlmConfig();
+  const provider = config.providers.find(({ id }) => id === providerId);
+  if (!provider) throw new Error('提供商不存在');
+  if (!provider.models.includes(model)) throw new Error('模型不在该提供商的模型列表中');
+  const normalized = normalizeEffortLevels(levels);
+  if (!normalized.includes(effort)) throw new Error('该档位不在这个模型开启的推理强度列表中');
+  provider.modelConfigs = {
+    ...provider.modelConfigs,
+    [model]: { ...provider.modelConfigs?.[model], effortLevels: normalized, effort },
+  };
+  saveLlmConfig(config);
+}
+
 export function removeLlmProvider(id: string): void {
   const providerId = idSchema.parse(id);
   const config = loadLlmConfig();

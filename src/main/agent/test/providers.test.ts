@@ -6,6 +6,7 @@ import {
   type StoredLlmConfig,
 } from '../../credentials';
 import {
+  enableModelEffortLevels,
   listLlmProviders,
   modelListEndpoints,
   parseModelList,
@@ -208,6 +209,21 @@ describe('LLM provider config', () => {
     expect(() =>
       saveLlmProvider({ ...input, modelConfigs: { [model]: { effortLevels: ['turbo'] } } }),
     ).toThrow();
+  });
+
+  it('writes the vendor effort levels back to the model config', () => {
+    const created = saveLlmProvider(input);
+    enableModelEffortLevels(created.id, 'deepseek-flash', ['max', 'low', 'none', 'low'], 'low');
+    expect(listLlmProviders()[0]!.modelConfigs?.['deepseek-flash']).toMatchObject({
+      effortLevels: ['none', 'low', 'max'],
+      effort: 'low',
+    });
+    expect(() => enableModelEffortLevels(created.id, 'deepseek-flash', ['low'], 'max')).toThrow(
+      '该档位不在',
+    );
+    expect(() => enableModelEffortLevels(created.id, 'missing', ['low'], 'low')).toThrow(
+      '模型不在',
+    );
   });
 
   it('keeps the stored key when editing with an empty apiKey', () => {

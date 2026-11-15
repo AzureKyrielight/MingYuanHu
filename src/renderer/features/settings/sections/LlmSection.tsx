@@ -235,7 +235,7 @@ function ModelSettingsDialog({
                 ))}
               </div>
               <p className="text-xs text-ink-3">
-                未勾选时关闭思考强度选择；已勾选的档位可在对话输入框旁切换。
+                已勾选的档位可在对话输入框旁切换；未勾选时按厂商公开的档位兜底，未收录的模型不显示选择。
               </p>
             </fieldset>
             {levels.length > 0 && (

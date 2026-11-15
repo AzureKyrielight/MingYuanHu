@@ -31,9 +31,9 @@ import { TASK_NOTICE } from '../../shared/api';
 import { parseChatBlocks, stripChatImageTokens } from '../../shared/chat-input';
 import { getDatabase } from '../database';
 import { storageDirectory } from '../storage';
-import { llmProviders, usableLlmProviders } from './providers';
+import { llmProviders, usableLlmProviders, enableModelEffortLevels } from './providers';
 import { forkSessionFile, loadPi, openPiSession, resolveModel, type SessionModel } from './pi';
-import { llmModelSettings } from '../../shared/llm-presets';
+import { llmModelSettings, presetEffortLevels } from '../../shared/llm-presets';
 import type { StoredLlmProvider } from '../credentials';
 import { agentEnvironment } from './environment';
 import { remoteProjectOf } from '../workspace/api';
@@ -260,11 +260,15 @@ function readyChoice(
   stored: boolean,
 ): ModelChoice {
   const settings = llmModelSettings(provider, model);
+  // 档位只用于展示可选范围；真正生效的仍是模型配置里勾选过的那些（选中时已写回）。
+  const effortLevels = settings.effortLevels.length
+    ? settings.effortLevels
+    : presetEffortLevels(provider.presetId, model);
   const valid = effort && settings.effortLevels.includes(effort) ? effort : null;
   return {
     kind: 'ready',
     selection: { provider, model, effort: valid ?? settings.effort ?? null },
-    effortLevels: settings.effortLevels,
+    effortLevels,
     stored,
   };
 }
@@ -1540,6 +1544,9 @@ export async function setSessionEffort(id: string, level: string): Promise<Works
   if (!choice.effortLevels.includes(level))
     throw new Error('该档位不在这个模型开启的推理强度列表中，请先在设置中勾选');
   const { provider, model } = choice.selection;
+  // 档位来自厂商默认而不是设置时，先写回模型配置：之后的重建会话才按推理模型发请求。
+  if (!llmModelSettings(provider, model).effortLevels.length)
+    enableModelEffortLevels(provider.id, model, choice.effortLevels, level);
   storeModel(id, provider.id, model, level);
   await applySelection(id);
   publish(id);

@@ -38,6 +38,35 @@ export const reasoningEffortLevels = [
   'ultra',
 ] as const;
 
+export type ReasoningEffort = (typeof reasoningEffortLevels)[number];
+
+/** 厂商公开 API 给出的档位；没收录的模型不猜，交给设置里手动勾选。 */
+const presetModelEfforts: Record<string, Record<string, readonly ReasoningEffort[]>> = {
+  deepseek: {
+    'deepseek-v4-pro': ['none', 'low', 'high', 'max'],
+    'deepseek-chat': ['none', 'low', 'high', 'max'],
+    'deepseek-flash': ['none', 'low', 'high', 'max'],
+    'deepseek-reasoner': ['low', 'high', 'max'],
+  },
+  openai: {
+    'gpt-5.2': ['none', 'minimal', 'low', 'medium', 'high'],
+    'gpt-5.2-mini': ['none', 'minimal', 'low', 'medium', 'high'],
+    'o4-mini': ['low', 'medium', 'high'],
+  },
+  anthropic: {
+    'claude-sonnet-4-5': ['low', 'medium', 'high'],
+    'claude-haiku-4-5': ['low', 'medium', 'high'],
+  },
+};
+
+/** 模型还没在设置里勾选档位时，用所属厂商公开支持的档位作为可选范围。 */
+export function presetEffortLevels(
+  presetId: string | null | undefined,
+  model: string,
+): ReasoningEffort[] {
+  return presetId ? [...(presetModelEfforts[presetId]?.[model] ?? [])] : [];
+}
+
 export const llmProviderPresets: readonly LlmProviderPreset[] = [
   {
     id: 'deepseek',

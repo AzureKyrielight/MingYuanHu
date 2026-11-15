@@ -34,9 +34,12 @@ const state = vi.hoisted(() => ({
     baseUrl: string;
     apiKey: string;
     models: string[];
-    presetId: null;
+    presetId: string | null;
+    modelConfigs?: Record<string, { effortLevels?: string[]; effort?: string }>;
     enabled: boolean;
   }[],
+  /** 会话选用厂商档位时写回模型配置的调用。 */
+  effortWrites: [] as [string, string, string[], string][],
   /** 假会话上的 setModel 调用（模型 id）。 */
   modelSwitches: [] as string[],
 }));
@@ -50,6 +53,16 @@ vi.mock('../providers', () => ({
   llmProviders: () => (state.configured ? state.providers : []),
   usableLlmProviders: () =>
     state.configured ? state.providers.filter(({ enabled }) => enabled) : [],
+  enableModelEffortLevels: (
+    providerId: string,
+    model: string,
+    levels: string[],
+    effort: string,
+  ) => {
+    state.effortWrites.push([providerId, model, levels, effort]);
+    const provider = state.providers.find(({ id }) => id === providerId)!;
+    provider.modelConfigs = { ...provider.modelConfigs, [model]: { effortLevels: levels, effort } };
+  },
 }));
 vi.mock('../../documents/runtime', () => ({
   DOCUMENT_SKILL: 'document-reading',
@@ -135,6 +148,7 @@ import {
   contextUsageView,
   deleteSession,
   runSessionCommand,
+  setSessionEffort,
   setSessionModel,
 } from '../session';
 import { readChatAttachment, stageChatMedia } from '../media';
@@ -163,6 +177,7 @@ beforeEach(() => {
     },
   ];
   state.modelSwitches = [];
+  state.effortWrites = [];
   state.root = mkdtempSync(join(tmpdir(), 'dela-session-'));
   state.db = new Database(':memory:');
   state.db.pragma('foreign_keys = ON');
@@ -786,6 +801,29 @@ describe('会话级模型', () => {
     await running;
     expect(state.disposed).toBe(1);
     expect(openSession(id).model).toBe('m');
+  });
+
+  it('没配置档位时列出厂商档位，选中后写回模型配置', async () => {
+    state.configured = true;
+    state.providers[0] = {
+      ...state.providers[0]!,
+      models: ['deepseek-flash'],
+      presetId: 'deepseek',
+    };
+    const id = newSession(null, 'chat').sessionId!;
+    await ask(id);
+    expect(openSession(id)).toMatchObject({
+      model: 'deepseek-flash',
+      effort: null,
+      effortLevels: ['none', 'low', 'high', 'max'],
+    });
+
+    await setSessionEffort(id, 'high');
+    expect(state.effortWrites).toEqual([
+      ['p1', 'deepseek-flash', ['none', 'low', 'high', 'max'], 'high'],
+    ]);
+    expect(openSession(id).effort).toBe('high');
+    await expect(setSessionEffort(id, 'ultra')).rejects.toThrow('该档位不在');
   });
 
   it('提供商停用后会话保留原选择但不能发送，另选模型后恢复', async () => {
