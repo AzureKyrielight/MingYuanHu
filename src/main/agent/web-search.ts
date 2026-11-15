@@ -23,7 +23,7 @@ const SEARCH_SNIPPET_LIMIT = 500;
 const SEARCH_TITLE_LIMIT = 200;
 
 /** 招聘、宣讲这类活动信息散落在学校站点、公众号与招聘平台，单条查询通常只召回其中一种来源。 */
-export type SearchMode = 'campus-recruit';
+export type SearchMode = 'campus-recruit' | 'campus-policy';
 type SearchSource = 'official' | 'wechat' | 'job-board' | 'web';
 type SearchOptions = {
   domains?: string[];
@@ -392,6 +392,8 @@ const BING_FRESHNESS: Record<string, string> = {
 
 /** 解析必应结果页：结果条目是 `<li class="b_algo">`，标题在其中的 `<h2><a href>`，
  *  摘要取 `b_caption` 里的第一个 `<p>`。 */
+/** 解析必应结果页：结果条目是 `<li class="b_algo">`，标题在其中的 `<h2><a href>`，
+ *  摘要取 `b_caption` 里的第一个 `<p>`。 */
 export function parseBingResults(html: string): WebSearchResult[] {
   const results: WebSearchResult[] = [];
   const blocks =
@@ -447,6 +449,70 @@ async function searchBingFallback(
       '联网搜索暂不可用（必应结果页解析为空，可能被限流）；可稍后重试，或在 设置 › 内置能力 的「网络」分组中配置搜索服务',
     );
   return results;
+}
+
+/** 解析 360 搜索结果页：条目是 `<li class="res-list">`，真实地址优先取 data-mdurl。 */
+export function parseSoResults(html: string): WebSearchResult[] {
+  const results: WebSearchResult[] = [];
+  for (const block of html.split('<li class="res-list').slice(1)) {
+    const mdurl = /\bdata-mdurl="([^"]+)"/i.exec(block)?.[1];
+    const anchor =
+      /<h3\b[^>]*>[\s\S]*?<a\b[^>]*\bhref\s*=\s*(["'])(.*?)\1[^>]*>([\s\S]*?)<\/a>/i.exec(block);
+    const url = stripTags(mdurl ?? anchor?.[2] ?? '');
+    if (!/^https?:\/\//i.test(url) || !anchor) continue;
+    const snippet =
+      /<p\b[^>]*\bclass\s*=\s*(["'])[^"']*\bres-desc[^"']*\1[^>]*>([\s\S]*?)<\/p>/i.exec(block);
+    results.push({
+      url,
+      title: stripTags(anchor[3] ?? '') || url,
+      snippet: snippet ? stripTags(snippet[2] ?? '') : '',
+    });
+  }
+  return results;
+}
+
+/** 必应结果与查询明显不相关时（免密钥兜底常见），换 360 搜索补一路。 */
+async function searchSoFallback(query: string): Promise<WebSearchResult[]> {
+  const params = new URLSearchParams({ q: query });
+  const response = await fetch(`https://www.so.com/s?${params}`, {
+    headers: {
+      'user-agent': FALLBACK_UA,
+      accept: 'text/html,application/xhtml+xml',
+      'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) throw searchError(response.status);
+  return parseSoResults(await response.text());
+}
+
+/** 粗粒度相关性判断：结果标题/摘要/URL 去空白后，需至少命中两个查询词才认为相关；
+ *  单词查询无法这样判断，视为相关（不触发降级）。 */
+function looksRelevant(query: string, results: WebSearchResult[]): boolean {
+  const tokens = query.split(/\s+/).filter((token) => token.length >= 2);
+  if (tokens.length < 2 || results.length === 0) return true;
+  return results.some((result) => {
+    const haystack = `${result.title} ${result.snippet} ${result.url}`.replace(/\s+/g, '');
+    return tokens.filter((token) => haystack.includes(token)).length >= 2;
+  });
+}
+
+/** 免密钥兜底：必应优先，结果与查询明显不相关时自动换 360 搜索补一路；
+ *  返回实际采用的来源名，供响应标注。 */
+async function searchFreeFallback(
+  query: string,
+  count: number,
+  freshness: string | undefined,
+): Promise<{ results: WebSearchResult[]; provider: string; switched: boolean }> {
+  const results = await searchBingFallback(query, count, freshness);
+  if (looksRelevant(query, results)) return { results, provider: 'bing', switched: false };
+  try {
+    const soResults = await searchSoFallback(query);
+    if (soResults.length > 0) return { results: soResults, provider: 'so', switched: true };
+  } catch {
+    // 360 也失败时保留必应结果，不因降级把仅剩的来源丢掉。
+  }
+  return { results, provider: 'bing', switched: false };
 }
 
 /** 联网搜索工具：优先用聊天侧选中的配置；一条都没配时回退到必应网页版（免密钥），
@@ -536,13 +602,16 @@ function configFingerprint(config: SearchConfig): string {
 }
 
 function expandQueries(query: string, mode: SearchMode | undefined): string[] {
-  if (mode !== 'campus-recruit') return [query];
-  return [
-    query,
-    `${query} 宣讲会 双选会`,
-    `site:scu.edu.cn ${query}`,
-    `site:mp.weixin.qq.com ${query}`,
-  ];
+  if (mode === 'campus-recruit')
+    return [
+      query,
+      `${query} 宣讲会 双选会`,
+      `site:scu.edu.cn ${query}`,
+      `site:mp.weixin.qq.com ${query}`,
+    ];
+  // 政策/细则/通知类：少用活动语义词，补精确短语与官方域名约束，避免被宽泛结果淹没。
+  if (mode === 'campus-policy') return [query, `site:scu.edu.cn ${query}`, `${query} 通知 公示`];
+  return [query];
 }
 
 async function searchOnce(
@@ -550,16 +619,17 @@ async function searchOnce(
   count: number,
   freshness: string | undefined,
   config: SearchConfig,
-): Promise<WebSearchResult[]> {
-  return !config
-    ? await searchBingFallback(query, count, freshness)
-    : config.provider === 'brave'
+): Promise<{ results: WebSearchResult[]; provider: string; switched: boolean }> {
+  if (!config) return searchFreeFallback(query, count, freshness);
+  const results =
+    config.provider === 'brave'
       ? await searchBrave(query, count, freshness, config.apiKey)
       : config.provider === 'google'
         ? await searchGoogle(query, count, config.apiKey, config.cx)
         : config.provider === 'deepseek'
           ? await searchDeepSeek(query, count, config.apiKey)
           : await searchCustomEndpoint(query, config.url, config.headers);
+  return { results, provider: config.provider, switched: false };
 }
 
 async function performWebSearch(
@@ -578,6 +648,8 @@ async function performWebSearch(
   const warnings: string[] = [];
   const errors: unknown[] = [];
   const seen = new Set<string>();
+  const providers = new Set<string>();
+  let switched = false;
   settled.forEach((outcome, index) => {
     if (outcome.status === 'rejected') {
       errors.push(outcome.reason);
@@ -586,7 +658,9 @@ async function performWebSearch(
       warnings.push(`${queries[index]}：${reason}`);
       return;
     }
-    for (const result of outcome.value) {
+    providers.add(outcome.value.provider);
+    if (outcome.value.switched) switched = true;
+    for (const result of outcome.value.results) {
       if (seen.has(result.url)) continue;
       seen.add(result.url);
       merged.push(result);
@@ -594,11 +668,12 @@ async function performWebSearch(
   });
   // 全部子查询都失败时才报错；部分失败仍返回其余来源，并用 warnings 说明缺了哪一路。
   if (merged.length === 0 && errors.length === queries.length) throw errors[0];
+  if (switched) warnings.push('必应结果与查询相关性低，已自动改用 360 搜索补查');
   if (options.mode)
     merged.sort((a, b) => SOURCE_RANK[sourceOf(a.url)] - SOURCE_RANK[sourceOf(b.url)]);
   return {
     query,
-    provider: config?.provider ?? 'bing',
+    provider: (config?.provider ?? [...providers].join('+')) || 'bing',
     ...(config ? {} : { fallback: true }),
     ...(options.mode ? { mode: options.mode, queries } : {}),
     ...(warnings.length > 0 ? { warnings } : {}),

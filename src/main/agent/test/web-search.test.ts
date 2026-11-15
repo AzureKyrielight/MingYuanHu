@@ -309,18 +309,22 @@ it('招聘模式展开多路查询，按来源排序去重并标注来源', asyn
   const fetchMock = vi.fn(async (input: unknown) => {
     const query = new URL(String(input)).searchParams.get('q') ?? '';
     if (query.includes('site:mp.weixin.qq.com'))
-      return new Response(bingPage([{ url: 'https://mp.weixin.qq.com/s/a', title: '公众号推文' }]));
+      return new Response(
+        bingPage([
+          { url: 'https://mp.weixin.qq.com/s/a', title: '腾讯 网易 米哈游 宣讲 公众号推文' },
+        ]),
+      );
     if (query.includes('site:scu.edu.cn'))
       return new Response(
         bingPage([
-          { url: 'https://job.scu.edu.cn/notice/1', title: '就业网公告' },
+          { url: 'https://job.scu.edu.cn/notice/1', title: '腾讯 网易 米哈游 宣讲 就业网公告' },
           { url: 'https://mp.weixin.qq.com/s/a', title: '重复的公众号推文' },
         ]),
       );
     return new Response(
       bingPage([
-        { url: 'https://www.zhaopin.com/job/1', title: '招聘平台职位' },
-        { url: 'https://example.com/news', title: '转载新闻' },
+        { url: 'https://www.zhaopin.com/job/1', title: '腾讯 网易 米哈游 宣讲 招聘平台职位' },
+        { url: 'https://example.com/news', title: '腾讯 网易 米哈游 宣讲 转载新闻' },
       ]),
     );
   });
@@ -375,5 +379,83 @@ it('普通搜索不带 mode 时不展开也不标注来源', async () => {
   const result = await webSearch('普通查询', 3);
   expect(result.mode).toBeUndefined();
   expect(result.results).toEqual([{ url: 'https://example.com/a', title: 'A', snippet: '摘要' }]);
+  vi.unstubAllGlobals();
+});
+
+it('政策模式展开官方域名与通知语义词查询并标注来源', async () => {
+  const fetchMock = vi.fn(async (input: unknown) => {
+    const query = new URL(String(input)).searchParams.get('q') ?? '';
+    return new Response(
+      bingPage([
+        { url: 'https://cs.scu.edu.cn/info/1247/19388.htm', title: `学院通知 ${query}` },
+        { url: 'https://www.zizzs.com/gk/x', title: `转载 ${query}` },
+      ]),
+    );
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  const result = await webSearch('四川大学计算机学院 2026届 推免 实施细则', 8, undefined, {
+    mode: 'campus-policy',
+  });
+  expect(fetchMock).toHaveBeenCalledTimes(3);
+  expect(result.queries).toEqual([
+    '四川大学计算机学院 2026届 推免 实施细则',
+    'site:scu.edu.cn 四川大学计算机学院 2026届 推免 实施细则',
+    '四川大学计算机学院 2026届 推免 实施细则 通知 公示',
+  ]);
+  expect(result.results.map(({ url, source }) => [url, source])).toEqual([
+    ['https://cs.scu.edu.cn/info/1247/19388.htm', 'official'],
+    ['https://www.zizzs.com/gk/x', 'web'],
+  ]);
+  vi.unstubAllGlobals();
+});
+
+const soPage = (items: { url: string; title: string; snippet?: string }[]) =>
+  items
+    .map(
+      ({ url, title, snippet }) =>
+        `<li class="res-list" data-mdurl="${url}"><h3 class="res-title"><a href="https://www.so.com/link?m=x">${title}</a></h3><p class="res-desc">${snippet ?? '摘要'}</p></li>`,
+    )
+    .join('');
+
+it('必应结果与查询不相关时自动改用 360 搜索并给出说明', async () => {
+  const fetchMock = vi.fn(async (input: unknown) => {
+    const url = String(input);
+    if (url.includes('cn.bing.com'))
+      return new Response(bingPage([{ url: 'https://example.com/x', title: '无关百科' }]));
+    if (url.includes('www.so.com'))
+      return new Response(
+        soPage([
+          {
+            url: 'https://cs.scu.edu.cn/info/1247/19388.htm',
+            title: '学院关于推荐2026届优秀应届本科毕业生免试攻读研究生工作的通知',
+            snippet: '根据教育部推免研究生工作指导意见…',
+          },
+        ]),
+      );
+    throw new Error(`unexpected ${url}`);
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  const result = await webSearch('四川大学计算机学院 2026届 推免 实施细则', 5);
+  expect(result.provider).toBe('so');
+  expect(result.results[0]).toMatchObject({
+    url: 'https://cs.scu.edu.cn/info/1247/19388.htm',
+    snippet: '根据教育部推免研究生工作指导意见…',
+  });
+  expect(result.warnings).toHaveLength(1);
+  expect(result.warnings?.[0]).toContain('360');
+  vi.unstubAllGlobals();
+});
+
+it('360 也失败时保留必应结果，不因降级丢失仅剩来源', async () => {
+  const fetchMock = vi.fn(async (input: unknown) => {
+    const url = String(input);
+    if (url.includes('www.so.com')) throw new Error('network down');
+    return new Response(bingPage([{ url: 'https://example.com/x', title: '无关百科' }]));
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  const result = await webSearch('四川大学计算机学院 2026届 推免 名额 公示', 5);
+  expect(result.provider).toBe('bing');
+  expect(result.results[0]?.title).toBe('无关百科');
+  expect(result.warnings).toBeUndefined();
   vi.unstubAllGlobals();
 });
