@@ -26,6 +26,14 @@ describe('findMath', () => {
     ]);
   });
 
+  it('LaTeX 原生定界符同样识别，代码里的跳过', () => {
+    expect(find('内点与内部 \\(E^\\circ\\)，以及\n\\[\n\\int_0^1 x\\,dx\n\\]')).toEqual([
+      { tex: 'E^\\circ', display: false },
+      { tex: '\\int_0^1 x\\,dx', display: true },
+    ]);
+    expect(find('`\\(a\\)` 与 \\(b\\)', (pos) => pos < 7)).toEqual([{ tex: 'b', display: false }]);
+  });
+
   it('代码里的 $ 跳过', () => {
     const text = '`$a$` 与 $b$';
     expect(find(text, (pos) => pos < 5)).toEqual([{ tex: 'b', display: false }]);

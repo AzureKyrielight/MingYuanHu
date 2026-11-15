@@ -114,6 +114,67 @@ const chatLinkSafety: LinkSafetyConfig = {
   enabled: true,
 };
 
+/** Markdown 把 `\(` 当成转义括号吃掉，模型输出的 LaTeX 原生定界符先换成 KaTeX 认的 `$`。
+ *  代码块与行内代码原样保留；未闭合的定界符不动，等流式输出的后半截到了再换。 */
+function convertMath(chunk: string): string {
+  let out = '';
+  let index = 0;
+  while (index < chunk.length) {
+    if (chunk[index] === '`') {
+      const run = /^`+/.exec(chunk.slice(index))![0];
+      const close = chunk.indexOf(run, index + run.length);
+      if (close < 0) return out + chunk.slice(index);
+      out += chunk.slice(index, close + run.length);
+      index = close + run.length;
+      continue;
+    }
+    const closing = chunk.startsWith('\\(', index)
+      ? '\\)'
+      : chunk.startsWith('\\[', index)
+        ? '\\]'
+        : null;
+    if (!closing) {
+      out += chunk[index];
+      index += 1;
+      continue;
+    }
+    let end = index + 2;
+    while (end < chunk.length && !(chunk.startsWith(closing, end) && chunk[end - 1] !== '\\'))
+      end += 1;
+    if (end >= chunk.length) return out + chunk.slice(index);
+    const tex = chunk.slice(index + 2, end);
+    const delimiter = closing === '\\)' ? '$' : '$$';
+    out += tex.trim() ? `${delimiter}${tex}${delimiter}` : chunk.slice(index, end + 2);
+    index = end + 2;
+  }
+  return out;
+}
+
+function normalizeLatexMath(text: string): string {
+  const output: string[] = [];
+  let prose: string[] = [];
+  let fence: string | null = null;
+  const flush = () => {
+    if (prose.length) output.push(...convertMath(prose.join('\n')).split('\n'));
+    prose = [];
+  };
+  for (const line of text.split('\n')) {
+    const marker = /^[ \t]*(?:>[ \t]*)*(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence) {
+      if (marker && marker[0] === fence[0] && marker.length >= fence.length) fence = null;
+      output.push(line);
+    } else if (marker) {
+      flush();
+      fence = marker;
+      output.push(line);
+    } else {
+      prose.push(line);
+    }
+  }
+  flush();
+  return output.join('\n');
+}
+
 /**
  * 聊天区消息体的 Markdown 版式（聊天气泡、回答、工作过程说明共用）。
  * 代码块参照 DeepSeek 网页版的无界一体化卡片：无边框、头部与代码之间无分隔线，头部 sticky
@@ -152,7 +213,7 @@ export function ChatMarkdown({
       translations={chatTranslations}
       {...props}
     >
-      {children}
+      {typeof children === 'string' ? normalizeLatexMath(children) : children}
     </Streamdown>
   );
 }

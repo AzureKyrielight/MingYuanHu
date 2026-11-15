@@ -1,4 +1,4 @@
-// 笔记里的数学公式：定位 `$…$` / `$$…$$` 并交给 KaTeX 渲染。
+// 笔记里的数学公式：定位 `$…$` / `$$…$$` / `\(…\)` / `\[…\]` 并交给 KaTeX 渲染。
 // Lezer 的 Markdown 语法没有公式节点，所以按文本扫描；代码区间由调用方排除。
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
@@ -14,6 +14,9 @@ export interface MathRange {
    这样「花了 $5 和 $10」这类金额不会被当成公式。 */
 const inlineRe = /(?<![\\$])\$(?!\s)((?:\\.|[^$\\\n])+?)(?<!\s)\$(?![\d$])/g;
 const blockRe = /(?<!\\)\$\$([\s\S]+?)(?<!\\)\$\$/g;
+/* 模型输出的 LaTeX 原生定界符。 */
+const inlineLatexRe = /(?<!\\)\\\(([\s\S]+?)\\\)/g;
+const blockLatexRe = /(?<!\\)\\\[([\s\S]+?)\\\]/g;
 
 /** 在 text（文档中从 offset 开始的一段）里找公式；skip 判断某个位置是否落在代码里。 */
 export function findMath(
@@ -23,14 +26,14 @@ export function findMath(
 ): MathRange[] {
   const ranges: MathRange[] = [];
   const taken: [number, number][] = [];
-  for (const match of text.matchAll(blockRe)) {
+  for (const match of [...text.matchAll(blockRe), ...text.matchAll(blockLatexRe)]) {
     const from = offset + match.index!;
     if (skip(from)) continue;
     const to = from + match[0].length;
     ranges.push({ from, to, tex: match[1]!.trim(), display: true });
     taken.push([from, to]);
   }
-  for (const match of text.matchAll(inlineRe)) {
+  for (const match of [...text.matchAll(inlineRe), ...text.matchAll(inlineLatexRe)]) {
     const from = offset + match.index!;
     const to = from + match[0].length;
     if (skip(from) || taken.some(([a, b]) => from < b && to > a)) continue;

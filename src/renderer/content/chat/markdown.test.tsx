@@ -35,6 +35,27 @@ it('static 模式保留未闭合尖括号之后的正文', async () => {
   expect(host.textContent).toBe('a <b dsadas');
 });
 
+it('LaTeX 原生定界符按公式渲染', async () => {
+  await act(async () => {
+    root.render(
+      <ChatMarkdown>{'内点与内部 \\(E^\\circ\\)\n\n\\[\n\\int_0^1 x\\,dx\n\\]\n'}</ChatMarkdown>,
+    );
+  });
+
+  expect(host.querySelector('.katex')).not.toBeNull();
+  expect(host.querySelector('.katex-display')).not.toBeNull();
+});
+
+it('代码里的 LaTeX 定界符保持原文', async () => {
+  await act(async () => {
+    root.render(<ChatMarkdown>{'`\\(x\\)` 与\n\n```tex\n\\(y\\)\n```'}</ChatMarkdown>);
+  });
+  await vi.waitFor(() => expect(host.querySelector('pre')).not.toBeNull(), { timeout: 10_000 });
+
+  expect(host.querySelector('.katex')).toBeNull();
+  expect(host.textContent).toContain('\\(x\\)');
+});
+
 it('代码块用共用的 --syntax-* 配色高亮，不写死任何主题色值', async () => {
   await act(async () => {
     root.render(<ChatMarkdown>{'```js\nconst a = "s"; // c\n```'}</ChatMarkdown>);

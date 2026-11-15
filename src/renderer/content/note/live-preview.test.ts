@@ -87,6 +87,12 @@ describe('markdownLivePreview', () => {
     expect(editor.state.sliceDoc()).toBe(doc);
   });
 
+  it('LaTeX 原生定界符也即时渲染', () => {
+    const doc = '内点与内部 \\(E^\\circ\\)\n\n末行';
+    const editor = mount(doc, doc.length);
+    expect(editor.contentDOM.querySelector('.cm-md-math .katex')).not.toBeNull();
+  });
+
   it('代码里的 $ 不渲染成公式', () => {
     const editor = mount('`$a$` 文字\n\n末行', '`$a$` 文字\n\n'.length);
     expect(editor.contentDOM.querySelector('.cm-md-math')).toBeNull();
