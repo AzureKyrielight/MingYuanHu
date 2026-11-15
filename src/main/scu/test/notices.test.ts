@@ -66,6 +66,24 @@ describe('parseNoticeList', () => {
     expect(notices[1]?.date).toBe('2026-10-28');
   });
 
+  it('归档页链接带 ../ 前缀时同样解析', () => {
+    const html = `
+      <li>
+        <a href="../info/1069/3066.htm" target="_blank">
+          <div class="date"><p>12/30 </p><span>2011</span></div>
+          <div class="text"><p>四川大学推荐免试研究生工作流程</p></div>
+        </a>
+      </li>`;
+    expect(parseNoticeList(html)).toEqual([
+      {
+        id: 'info/1069/3066.htm',
+        title: '四川大学推荐免试研究生工作流程',
+        date: '2011-12-30',
+        url: 'https://jwc.scu.edu.cn/info/1069/3066.htm',
+      },
+    ]);
+  });
+
   it('结构不匹配时返回空数组', () => {
     expect(parseNoticeList('<html></html>')).toEqual([]);
   });

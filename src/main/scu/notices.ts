@@ -63,8 +63,9 @@ export function decodeHtml(bytes: Uint8Array, contentType: string | null): strin
   }
 }
 
+// 归档页（tzgg/N.htm）的链接相对当前目录写为 ../info/...，首页才是 info/...。
 const ITEM_PATTERN =
-  /<li>\s*<a href="(info\/\d+\/\d+\.htm)"[^>]*>[\s\S]*?<div class="date">\s*<p>\s*([\d/]+)\s*<\/p>\s*<span>\s*(\d{4})\s*<\/span>[\s\S]*?<div class="text">\s*<p>([\s\S]*?)<\/p>/g;
+  /<li>\s*<a href="(?:\.\.\/|\/)?(info\/\d+\/\d+\.htm)"[^>]*>[\s\S]*?<div class="date">\s*<p>\s*([\d/]+)\s*<\/p>\s*<span>\s*(\d{4})\s*<\/span>[\s\S]*?<div class="text">\s*<p>([\s\S]*?)<\/p>/g;
 
 function listPath(page: number): string {
   return page <= 1 ? `${BASE}/tzgg.htm` : `${BASE}/tzgg/${page}.htm`;
