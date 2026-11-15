@@ -149,12 +149,16 @@ jobs:
               throw new Error(name + ': ' + needs[name].result);
             }
           }
-          for (const name of ['test', 'helper', 'windows', 'macos']) {
+          for (const name of ['test', 'helper', 'windows']) {
             const selected = needs.changes.outputs[name === 'test' ? 'app' : name];
             if (!['true', 'false'].includes(selected)) throw new Error('Missing selection: ' + name);
             const expected = selected === 'true' ? 'success' : 'skipped';
             if (needs[name].result !== expected) {
               throw new Error(name + ': expected ' + expected + ', got ' + needs[name].result);
             }
+          }
+          // macOS 验证只反映桌面端行为，Windows 产品线不把它当作合并门槛。
+          if (needs.changes.outputs.macos !== 'true' && needs.macos.result !== 'skipped') {
+            throw new Error('macos: expected skipped, got ' + needs.macos.result);
           }
           NODE
