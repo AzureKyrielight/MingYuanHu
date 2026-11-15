@@ -80,7 +80,7 @@ function loadProfile(warnings: string[]) {
 }
 
 export const academicFormatsTool = tool(
-  '列出可用的学校文书格式：封面字段、篇幅与关键词要求。生成课程论文前先确认格式 id。',
+  '列出可用的课程论文格式：封面字段、篇幅与关键词要求。任意课程生成前先确认格式 id。',
   z.object({}).strict(),
   () => ({
     formats: Object.values(COURSE_PAPER_FORMATS).map((format) => ({
@@ -95,7 +95,7 @@ export const academicFormatsTool = tool(
 );
 
 export const academicRenderTool = tool(
-  '把结构化论文草稿渲染成符合学校格式的 DOCX。draft 是项目里的草稿 JSON 绝对路径，输出默认与草稿同名；封面学生信息从本机缓存读取。validateOnly 只做检查不写文件。',
+  '把任意课程的结构化论文草稿按选定格式渲染成 DOCX。draft 是项目里的草稿 JSON 绝对路径，输出默认与草稿同名；封面学生信息从本机缓存读取。validateOnly 只做检查不写文件。',
   z
     .object({
       format: z.string().trim().min(1).max(60).default('scu-course-paper'),
