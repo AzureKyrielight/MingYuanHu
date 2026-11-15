@@ -188,6 +188,13 @@ it('解析必应结果页的标题、链接与摘要', () => {
   ]);
 });
 
+it('兼容必应结果的单引号属性与 class 顺序', () => {
+  const html = `<LI data-x="1" CLASS='foo b_algo bar'><H2><A href='https://mp.weixin.qq.com/s/demo'>川大招聘 &amp; 宣讲</A></H2><DIV CLASS='b_caption extra'><P>线下宣讲&nbsp;地点</P></DIV></LI>`;
+  expect(parseBingResults(html)).toEqual([
+    { url: 'https://mp.weixin.qq.com/s/demo', title: '川大招聘 & 宣讲', snippet: '线下宣讲 地点' },
+  ]);
+});
+
 it('没配搜索服务时自动回退到免密钥的必应网页版', async () => {
   expect(readWebSearchConfig()).toBeNull();
   const html = `<li class="b_algo"><h2><a href="https://example.com/a">示例</a></h2>
@@ -287,5 +294,86 @@ it('必应回退解析为空时报错并引导手动配置', async () => {
       ),
   );
   await expect(webSearch('示例', 3)).rejects.toThrow(/配置搜索服务/);
+  vi.unstubAllGlobals();
+});
+
+const bingPage = (items: { url: string; title: string }[]) =>
+  items
+    .map(
+      ({ url, title }) =>
+        `<li class="b_algo"><h2><a href="${url}">${title}</a></h2><div class="b_caption"><p>摘要</p></div></li>`,
+    )
+    .join('');
+
+it('招聘模式展开多路查询，按来源排序去重并标注来源', async () => {
+  const fetchMock = vi.fn(async (input: unknown) => {
+    const query = new URL(String(input)).searchParams.get('q') ?? '';
+    if (query.includes('site:mp.weixin.qq.com'))
+      return new Response(bingPage([{ url: 'https://mp.weixin.qq.com/s/a', title: '公众号推文' }]));
+    if (query.includes('site:scu.edu.cn'))
+      return new Response(
+        bingPage([
+          { url: 'https://job.scu.edu.cn/notice/1', title: '就业网公告' },
+          { url: 'https://mp.weixin.qq.com/s/a', title: '重复的公众号推文' },
+        ]),
+      );
+    return new Response(
+      bingPage([
+        { url: 'https://www.zhaopin.com/job/1', title: '招聘平台职位' },
+        { url: 'https://example.com/news', title: '转载新闻' },
+      ]),
+    );
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  const result = await webSearch('腾讯 网易 米哈游 宣讲', 8, undefined, { mode: 'campus-recruit' });
+  expect(fetchMock).toHaveBeenCalledTimes(4);
+  expect(result).toMatchObject({ mode: 'campus-recruit' });
+  expect(result.queries).toEqual([
+    '腾讯 网易 米哈游 宣讲',
+    '腾讯 网易 米哈游 宣讲 宣讲会 双选会',
+    'site:scu.edu.cn 腾讯 网易 米哈游 宣讲',
+    'site:mp.weixin.qq.com 腾讯 网易 米哈游 宣讲',
+  ]);
+  expect(result.results.map(({ url, source }) => [url, source])).toEqual([
+    ['https://job.scu.edu.cn/notice/1', 'official'],
+    ['https://mp.weixin.qq.com/s/a', 'wechat'],
+    ['https://www.zhaopin.com/job/1', 'job-board'],
+    ['https://example.com/news', 'web'],
+  ]);
+  vi.unstubAllGlobals();
+});
+
+it('招聘模式部分查询失败时保留可用来源并说明缺了哪一路', async () => {
+  const fetchMock = vi.fn(async (input: unknown) => {
+    const query = new URL(String(input)).searchParams.get('q') ?? '';
+    if (query.includes('site:mp.weixin.qq.com')) throw new Error('搜索失败（HTTP 429）');
+    return new Response(bingPage([{ url: 'https://job.scu.edu.cn/x', title: '公告' }]));
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  const result = await webSearch('川大 游戏公司 宣讲', 5, undefined, { mode: 'campus-recruit' });
+  expect(result.results[0]).toMatchObject({ url: 'https://job.scu.edu.cn/x', source: 'official' });
+  expect(result.warnings).toHaveLength(1);
+  expect(result.warnings?.[0]).toContain('HTTP 429');
+  vi.unstubAllGlobals();
+});
+
+it('招聘模式全部查询失败时抛出首个错误', async () => {
+  vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network down')));
+  await expect(
+    webSearch('川大 宣讲会 全失败', 5, undefined, { mode: 'campus-recruit' }),
+  ).rejects.toThrow('network down');
+  vi.unstubAllGlobals();
+});
+
+it('普通搜索不带 mode 时不展开也不标注来源', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi
+      .fn()
+      .mockResolvedValue(new Response(bingPage([{ url: 'https://example.com/a', title: 'A' }]))),
+  );
+  const result = await webSearch('普通查询', 3);
+  expect(result.mode).toBeUndefined();
+  expect(result.results).toEqual([{ url: 'https://example.com/a', title: 'A', snippet: '摘要' }]);
   vi.unstubAllGlobals();
 });

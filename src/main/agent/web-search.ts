@@ -22,11 +22,23 @@ const SEARCH_CACHE_LIMIT = 32;
 const SEARCH_SNIPPET_LIMIT = 500;
 const SEARCH_TITLE_LIMIT = 200;
 
-type SearchOptions = { domains?: string[]; excludeDomains?: string[]; refresh?: boolean };
+/** 招聘、宣讲这类活动信息散落在学校站点、公众号与招聘平台，单条查询通常只召回其中一种来源。 */
+export type SearchMode = 'campus-recruit';
+type SearchSource = 'official' | 'wechat' | 'job-board' | 'web';
+type SearchOptions = {
+  domains?: string[];
+  excludeDomains?: string[];
+  refresh?: boolean;
+  mode?: SearchMode;
+};
+type SearchHit = WebSearchResult & { source?: SearchSource };
 type SearchResponse = {
   query: string;
   provider: string;
-  results: WebSearchResult[];
+  results: SearchHit[];
+  queries?: string[];
+  warnings?: string[];
+  mode?: SearchMode;
   fallback?: boolean;
   cacheHit: boolean;
   fetchedAt: number;
@@ -382,18 +394,26 @@ const BING_FRESHNESS: Record<string, string> = {
  *  摘要取 `b_caption` 里的第一个 `<p>`。 */
 export function parseBingResults(html: string): WebSearchResult[] {
   const results: WebSearchResult[] = [];
-  for (const block of html.split('<li class="b_algo"').slice(1)) {
-    const link = /<h2[^>]*>\s*<a[^>]*\shref="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i.exec(block);
+  const blocks =
+    html.match(/<li\b[^>]*\bclass\s*=\s*(["'])[^"']*\bb_algo\b[^"']*\1[^>]*>[\s\S]*?<\/li>/gi) ??
+    [];
+  for (const block of blocks) {
+    const link =
+      /<h2\b[^>]*>[\s\S]*?<a\b[^>]*\bhref\s*=\s*(["'])(.*?)\1[^>]*>([\s\S]*?)<\/a>/i.exec(block);
     if (!link) continue;
-    const url = stripTags(link[1] ?? '');
+    const url = stripTags(link[2] ?? '');
     if (!/^https?:\/\//i.test(url)) continue;
     const snippet =
-      /<p[^>]*class="[^"]*b_lineclamp[^"]*"[^>]*>([\s\S]*?)<\/p>/i.exec(block) ??
-      /<div[^>]*class="[^"]*b_caption[^"]*"[^>]*>[\s\S]*?<p[^>]*>([\s\S]*?)<\/p>/i.exec(block);
+      /<p\b[^>]*\bclass\s*=\s*(["'])[^"']*\bb_lineclamp[^"']*\1[^>]*>([\s\S]*?)<\/p>/i.exec(
+        block,
+      ) ??
+      /<div\b[^>]*\bclass\s*=\s*(["'])[^"']*\bb_caption[^"']*\1[^>]*>[\s\S]*?<p\b[^>]*>([\s\S]*?)<\/p>/i.exec(
+        block,
+      );
     results.push({
       url,
-      title: stripTags(link[2] ?? '') || url,
-      snippet: snippet ? stripTags(snippet[1] ?? '') : '',
+      title: stripTags(link[3] ?? '') || url,
+      snippet: snippet ? stripTags(snippet[2] ?? snippet[1] ?? '') : '',
     });
   }
   return results;
@@ -448,11 +468,37 @@ function hostMatches(url: string, domains: string[]): boolean {
   }
 }
 
+const JOB_BOARD_HOSTS = [
+  'zhaopin.com',
+  'liepin.com',
+  '51job.com',
+  'nowcoder.com',
+  'yingjiesheng.com',
+  'zhipin.com',
+  'shixiseng.com',
+];
+const SOURCE_RANK: Record<SearchSource, number> = {
+  official: 0,
+  wechat: 1,
+  'job-board': 2,
+  web: 3,
+};
+
+function sourceOf(url: string): SearchSource {
+  const host = new URL(url).hostname.toLowerCase();
+  const belongs = (domain: string) => host === domain || host.endsWith(`.${domain}`);
+  if (belongs('scu.edu.cn')) return 'official';
+  if (belongs('weixin.qq.com')) return 'wechat';
+  if (JOB_BOARD_HOSTS.some(belongs)) return 'job-board';
+  return 'web';
+}
+
 function compactResults(
   results: WebSearchResult[],
   count: number,
   options: SearchOptions,
-): WebSearchResult[] {
+  annotate = false,
+): SearchHit[] {
   const domains = normalizeDomains(options.domains);
   const excluded = normalizeDomains(options.excludeDomains);
   const seen = new Set<string>();
@@ -469,6 +515,7 @@ function compactResults(
       url: result.url,
       title: compact(result.title).slice(0, SEARCH_TITLE_LIMIT),
       snippet: compact(result.snippet).slice(0, SEARCH_SNIPPET_LIMIT),
+      ...(annotate ? { source: sourceOf(result.url) } : {}),
     }));
 }
 
@@ -488,15 +535,23 @@ function configFingerprint(config: SearchConfig): string {
   return createHash('sha256').update(JSON.stringify(safe)).digest('hex').slice(0, 16);
 }
 
-async function performWebSearch(
+function expandQueries(query: string, mode: SearchMode | undefined): string[] {
+  if (mode !== 'campus-recruit') return [query];
+  return [
+    query,
+    `${query} 宣讲会 双选会`,
+    `site:scu.edu.cn ${query}`,
+    `site:mp.weixin.qq.com ${query}`,
+  ];
+}
+
+async function searchOnce(
   query: string,
   count: number,
   freshness: string | undefined,
-  options: SearchOptions,
   config: SearchConfig,
-): Promise<SearchResponse> {
-  const startedAt = Date.now();
-  const raw = !config
+): Promise<WebSearchResult[]> {
+  return !config
     ? await searchBingFallback(query, count, freshness)
     : config.provider === 'brave'
       ? await searchBrave(query, count, freshness, config.apiKey)
@@ -505,18 +560,57 @@ async function performWebSearch(
         : config.provider === 'deepseek'
           ? await searchDeepSeek(query, count, config.apiKey)
           : await searchCustomEndpoint(query, config.url, config.headers);
+}
+
+async function performWebSearch(
+  query: string,
+  count: number,
+  freshness: string | undefined,
+  options: SearchOptions,
+  config: SearchConfig,
+): Promise<SearchResponse> {
+  const startedAt = Date.now();
+  const queries = expandQueries(query, options.mode);
+  const settled = await Promise.allSettled(
+    queries.map((item) => searchOnce(item, count, freshness, config)),
+  );
+  const merged: WebSearchResult[] = [];
+  const warnings: string[] = [];
+  const errors: unknown[] = [];
+  const seen = new Set<string>();
+  settled.forEach((outcome, index) => {
+    if (outcome.status === 'rejected') {
+      errors.push(outcome.reason);
+      const reason =
+        outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
+      warnings.push(`${queries[index]}：${reason}`);
+      return;
+    }
+    for (const result of outcome.value) {
+      if (seen.has(result.url)) continue;
+      seen.add(result.url);
+      merged.push(result);
+    }
+  });
+  // 全部子查询都失败时才报错；部分失败仍返回其余来源，并用 warnings 说明缺了哪一路。
+  if (merged.length === 0 && errors.length === queries.length) throw errors[0];
+  if (options.mode)
+    merged.sort((a, b) => SOURCE_RANK[sourceOf(a.url)] - SOURCE_RANK[sourceOf(b.url)]);
   return {
     query,
     provider: config?.provider ?? 'bing',
     ...(config ? {} : { fallback: true }),
-    results: compactResults(raw, count, options),
+    ...(options.mode ? { mode: options.mode, queries } : {}),
+    ...(warnings.length > 0 ? { warnings } : {}),
+    results: compactResults(merged, count, options, Boolean(options.mode)),
     cacheHit: false,
     fetchedAt: Date.now(),
     latencyMs: Date.now() - startedAt,
   };
 }
 
-/** 联网搜索工具。domains/excludeDomains 在本地按 URL 主机名过滤；refresh 跳过缓存。 */
+/** 联网搜索工具。domains/excludeDomains 在本地按 URL 主机名过滤；refresh 跳过缓存；
+ *  mode=campus-recruit 时把一次查询展开成官方站/公众号/活动语义词多路检索，合并去重并标注来源。 */
 export async function webSearch(
   query: string,
   count = 5,
@@ -532,6 +626,7 @@ export async function webSearch(
     freshness ?? '',
     normalizeDomains(options.domains),
     normalizeDomains(options.excludeDomains),
+    options.mode ?? '',
     configFingerprint(config),
   ]);
   const now = Date.now();
