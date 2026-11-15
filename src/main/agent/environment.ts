@@ -169,7 +169,7 @@ const webTools: ToolDefinition[] = [
         count: { type: 'integer', minimum: 1, maximum: 10 },
         freshness: { type: 'string' },
         domains: { type: 'array', items: { type: 'string' }, maxItems: 10 },
-        excludeDomains: { type: 'array', items: ['string'], maxItems: 10 },
+        excludeDomains: { type: 'array', items: { type: 'string' }, maxItems: 10 },
         mode: { type: 'string', enum: ['campus-recruit', 'campus-policy'] },
         refresh: { type: 'boolean' },
       },
