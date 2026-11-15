@@ -89,6 +89,10 @@ export function checkCoursePaperDraft(
     0,
   );
 
+  if (draft.title.length > limits.titleMaxChars)
+    warnings.push(
+      `题目 ${draft.title.length} 字，封面题目行约容纳 ${limits.titleMaxChars} 字，可能换行`,
+    );
   if (abstractChars < limits.abstractMinChars || abstractChars > limits.abstractMaxChars)
     warnings.push(
       `摘要 ${abstractChars} 字，格式要求约 400 字（${limits.abstractMinChars}–${limits.abstractMaxChars} 字）`,

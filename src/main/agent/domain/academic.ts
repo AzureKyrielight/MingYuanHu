@@ -4,6 +4,7 @@ import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path
 import { z } from 'zod';
 import {
   COURSE_PAPER_FORMATS,
+  COVER_LABELS,
   coursePaperFormat,
   type CoverFieldKey,
 } from '../../documents/academic/format';
@@ -119,7 +120,7 @@ export const academicRenderTool = tool(
     const missing = COVER_FIELDS.filter((field) => !cover[field]);
     if (missing.length)
       warnings.push(
-        `封面缺项：${missing.map((field) => format.cover.labels[field].replace(/\u3000/g, '')).join('、')}；可用 academic_profile 保存一次`,
+        `封面缺项：${missing.map((field) => COVER_LABELS[field]).join('、')}；可用 academic_profile 保存一次`,
       );
 
     if (input.validateOnly) return { valid: true, format: format.id, stats: check.stats, warnings };
@@ -139,7 +140,7 @@ export const academicRenderTool = tool(
         `输出文件已存在：${outputPath}；确认覆盖请传 overwrite: true`,
       );
 
-    const buffer = await renderCoursePaper(format, draft, cover);
+    const buffer = await renderCoursePaper(draft, cover);
     writeFileSync(outputPath, buffer);
     return {
       path: outputPath,
