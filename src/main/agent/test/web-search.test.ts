@@ -40,6 +40,7 @@ import {
   listWebSearchKeySources,
   listWebSearchOptions,
   parseBingResults,
+  parseSogouWechatResults,
   readWebSearchConfig,
   readWebSearchKey,
   removeWebSearchEntry,
@@ -330,7 +331,8 @@ it('招聘模式展开多路查询，按来源排序去重并标注来源', asyn
   });
   vi.stubGlobal('fetch', fetchMock);
   const result = await webSearch('腾讯 网易 米哈游 宣讲', 8, undefined, { mode: 'campus-recruit' });
-  expect(fetchMock).toHaveBeenCalledTimes(4);
+  // 4 路通用查询 + 搜狗微信的两次尝试（结果页没有 .txt-box，判为未返回结果后重试一次）。
+  expect(fetchMock).toHaveBeenCalledTimes(6);
   expect(result).toMatchObject({ mode: 'campus-recruit' });
   expect(result.queries).toEqual([
     '腾讯 网易 米哈游 宣讲',
@@ -356,8 +358,9 @@ it('招聘模式部分查询失败时保留可用来源并说明缺了哪一路'
   vi.stubGlobal('fetch', fetchMock);
   const result = await webSearch('川大 游戏公司 宣讲', 5, undefined, { mode: 'campus-recruit' });
   expect(result.results[0]).toMatchObject({ url: 'https://job.scu.edu.cn/x', source: 'official' });
-  expect(result.warnings).toHaveLength(1);
-  expect(result.warnings?.[0]).toContain('HTTP 429');
+  expect(result.warnings?.some((item) => item.includes('HTTP 429'))).toBe(true);
+  // 搜狗微信同样拿不到结果，但这只应作为警告，不能吞掉或污染其余来源。
+  expect(result.warnings?.some((item) => item.includes('微信搜索'))).toBe(true);
   vi.unstubAllGlobals();
 });
 
@@ -457,5 +460,80 @@ it('360 也失败时保留必应结果，不因降级丢失仅剩来源', async 
   expect(result.provider).toBe('bing');
   expect(result.results[0]?.title).toBe('无关百科');
   expect(result.warnings).toBeUndefined();
+  vi.unstubAllGlobals();
+});
+
+const sogouPage = (
+  items: { title: string; snippet?: string; account?: string; href?: string; stamp?: string }[],
+) =>
+  `<html><body><ul class="news-list">${items
+    .map(
+      ({ title, snippet, account, href = '/link?url=abc&type=2', stamp = '1794408855' }) =>
+        `<li id="sogou_vr_11002601_box_0"><div class="txt-box"><h3><a href="${href}" target="_blank">${title}</a></h3><p class="txt-info">${snippet ?? '摘要'}</p><div class="s-p" t="${stamp}"><a class="account" href="/mp?x">${account ?? '川大计算机软件就业'}</a></div></div></li>`,
+    )
+    .join('')}</ul></body></html>`;
+
+it('解析搜狗微信结果页：标题、摘要、公众号与时间，跳过残缺与站外链接', () => {
+  const html = sogouPage([
+    {
+      title: '11月12日川大专场宣讲会｜双选会｜<em>11月20日米哈游</em>活动信息一览',
+      snippet: '米哈游招聘宣讲 2026-11-20 14:00 望江校区',
+    },
+    { title: '', snippet: '没有标题' },
+    { title: '站外链接', href: 'https://evil.example/x' },
+    { title: '空链接', href: '' },
+  ]);
+  const results = parseSogouWechatResults(html);
+  expect(results).toHaveLength(1);
+  expect(results[0]).toMatchObject({
+    title: '11月12日川大专场宣讲会｜双选会｜11月20日米哈游活动信息一览',
+    snippet: '米哈游招聘宣讲 2026-11-20 14:00 望江校区',
+    publisher: '川大计算机软件就业',
+  });
+  expect(results[0]!.url.startsWith('https://weixin.sogou.com/link?')).toBe(true);
+  expect(results[0]!.publishedAt).toBe(new Date(1794408855 * 1000).toISOString());
+});
+
+it('招聘模式合并搜狗微信结果并按来源排序', async () => {
+  const fetchMock = vi.fn(async (input: unknown) => {
+    if (String(input).includes('weixin.sogou.com'))
+      return new Response(
+        sogouPage([{ title: '11月20日米哈游活动信息一览', snippet: '宣讲 2026-11-20 14:00' }]),
+      );
+    return new Response(
+      bingPage([
+        { url: 'https://cs.scu.edu.cn/notice/1', title: '学院宣讲通知' },
+        { url: 'https://example.com/news', title: '转载新闻' },
+      ]),
+    );
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  const result = await webSearch('米哈游 四川大学 活动', 8, undefined, { mode: 'campus-recruit' });
+  expect(result.results.map(({ source }) => source)).toEqual(['official', 'wechat-search', 'web']);
+  expect(result.results[1]).toMatchObject({
+    title: '11月20日米哈游活动信息一览',
+    publisher: '川大计算机软件就业',
+    source: 'wechat-search',
+  });
+  expect(result.wechat).toMatchObject({ query: '米哈游 四川大学 活动', found: 1 });
+  vi.unstubAllGlobals();
+});
+
+it('搜狗微信触发验证码时只记警告，不影响整体结果也不重试', async () => {
+  const fetchMock = vi.fn(async (input: unknown) => {
+    if (String(input).includes('weixin.sogou.com'))
+      return new Response(
+        '<html><title>搜狗搜索</title><body>请输入验证码，此验证码用于确认这些请求是您的正常行为</body></html>',
+      );
+    return new Response(bingPage([{ url: 'https://cs.scu.edu.cn/notice/1', title: '学院通知' }]));
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  const result = await webSearch('米哈游 四川大学 活动', 5, undefined, { mode: 'campus-recruit' });
+  expect(result.results.map(({ source }) => source)).toEqual(['official']);
+  expect(result.warnings?.some((item) => item.includes('微信搜索'))).toBe(true);
+  expect(result.wechat).toMatchObject({ error: '微信搜索触发验证码，未取得结果' });
+  expect(
+    fetchMock.mock.calls.filter(([input]) => String(input).includes('weixin.sogou.com')),
+  ).toHaveLength(1);
   vi.unstubAllGlobals();
 });

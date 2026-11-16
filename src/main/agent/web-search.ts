@@ -9,7 +9,7 @@ import type {
 } from '../../shared/capabilities';
 import { readDisabledTools, setBuiltinCapabilities } from './tools';
 import { searchDeepSeek } from './deepseek';
-import { stripTags } from './html-text';
+import { decodeEntities, stripTags } from './html-text';
 
 // 搜索服务配置（设置 › 内置能力 › 网络）：可存多条（同类型可重复，供多账号复用额度），
 // 聊天输入框左下角选择当前使用哪一条；应用不内置搜索服务。
@@ -24,7 +24,7 @@ const SEARCH_TITLE_LIMIT = 200;
 
 /** 招聘、宣讲这类活动信息散落在学校站点、公众号与招聘平台，单条查询通常只召回其中一种来源。 */
 export type SearchMode = 'campus-recruit' | 'campus-policy';
-type SearchSource = 'official' | 'wechat' | 'job-board' | 'web';
+type SearchSource = 'official' | 'wechat' | 'wechat-search' | 'job-board' | 'web';
 type SearchOptions = {
   domains?: string[];
   excludeDomains?: string[];
@@ -38,6 +38,8 @@ type SearchResponse = {
   results: SearchHit[];
   queries?: string[];
   warnings?: string[];
+  /** 搜狗微信发现层：命中时说明实际查询与条数，失败时只记原因（不影响整体结果）。 */
+  wechat?: { query: string; found: number } | { error: string };
   mode?: SearchMode;
   fallback?: boolean;
   cacheHit: boolean;
@@ -264,6 +266,8 @@ export interface WebSearchResult {
   title: string;
   url: string;
   snippet: string;
+  publisher?: string;
+  publishedAt?: string;
 }
 
 function searchError(status: number): Error {
@@ -486,6 +490,101 @@ async function searchSoFallback(query: string): Promise<WebSearchResult[]> {
   return parseSoResults(await response.text());
 }
 
+/** 搜狗微信搜索的中转链接：只接受站内 /link 或公众号文章直链，空 href 会退化成站点根。 */
+function sogouArticleUrl(raw: string): string | null {
+  const href = decodeEntities(raw).trim();
+  if (!href || href === '#' || /^(?:javascript|mailto|data):/i.test(href)) return null;
+  let url: URL;
+  try {
+    url = new URL(href, 'https://weixin.sogou.com');
+  } catch {
+    return null;
+  }
+  if (!/^https?:$/.test(url.protocol) || url.username || url.password) return null;
+  if (url.hostname !== 'weixin.sogou.com' && url.hostname !== 'mp.weixin.qq.com') return null;
+  if (url.pathname === '/') return null;
+  url.hash = '';
+  return url.href;
+}
+
+const WECHAT_CHALLENGE = /antispider|请输入验证码|此验证码用于确认|VerifyCode|网络不给力/i;
+
+/** 搜狗用 `<em>` 标命中词；中文标题里不能把它变成空格，否则会和原文标题对不上。 */
+function inlineText(html: string): string {
+  return stripTags(html.replace(/<\/?(?:em|b|strong|i|span|font)\b[^>]*>/gi, ''));
+}
+
+/** 解析搜狗微信结果页：条目在 `<li>` 内的 `div.txt-box`，标题是 `h3 a`，
+ *  摘要在 `p.txt-info`，公众号名在 `a.account`，时间在 `.s-p[t="<unix秒>"]`。
+ *  微信文章普遍不被通用搜索收录，所以这一层常是唯一能召回学院公众号活动的入口。 */
+export function parseSogouWechatResults(html: string): WebSearchResult[] {
+  const results: WebSearchResult[] = [];
+  const seen = new Set<string>();
+  for (const block of html.split(/<li\b/i).slice(1)) {
+    if (!/\btxt-box\b/i.test(block)) continue;
+    const link =
+      /<h3\b[^>]*>[\s\S]*?<a\b[^>]*\bhref\s*=\s*(["'])(.*?)\1[^>]*>([\s\S]*?)<\/a>/i.exec(block);
+    if (!link) continue;
+    const url = sogouArticleUrl(link[2] ?? '');
+    const title = inlineText(link[3] ?? '');
+    if (!url || !title || seen.has(url)) continue;
+    const snippet =
+      /<p\b[^>]*\bclass\s*=\s*(["'])[^"']*\btxt-info\b[^"']*\1[^>]*>([\s\S]*?)<\/p>/i.exec(block);
+    const account =
+      /<a\b[^>]*\bclass\s*=\s*(["'])[^"']*\baccount\b[^"']*\1[^>]*>([\s\S]*?)<\/a>/i.exec(block);
+    const published =
+      /\bt\s*=\s*"(\d{9,11})"/i.exec(block)?.[1] ?? /timeConvert\('(\d{9,11})'\)/i.exec(block)?.[1];
+    seen.add(url);
+    results.push({
+      url,
+      title: title.slice(0, SEARCH_TITLE_LIMIT),
+      snippet: inlineText(snippet?.[2] ?? '').slice(0, SEARCH_SNIPPET_LIMIT),
+      ...(account ? { publisher: inlineText(account[2] ?? '').slice(0, 100) } : {}),
+      ...(published ? { publishedAt: new Date(Number(published) * 1000).toISOString() } : {}),
+    });
+    if (results.length >= 10) break;
+  }
+  return results;
+}
+
+/** 搜狗微信搜索：只读结果页，不跟随文章跳转（正文页由微信加验证码，不尝试绕过）。 */
+async function searchSogouWechat(query: string, count: number): Promise<WebSearchResult[]> {
+  const params = new URLSearchParams({ type: '2', ie: 'utf8', query });
+  const response = await fetch(`https://weixin.sogou.com/weixin?${params}`, {
+    headers: {
+      'user-agent': FALLBACK_UA,
+      accept: 'text/html,application/xhtml+xml',
+      'accept-language': 'zh-CN,zh;q=0.9',
+    },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`微信搜索失败（HTTP ${response.status}）`);
+  const html = await response.text();
+  if (WECHAT_CHALLENGE.test(html)) throw new Error('微信搜索触发验证码，未取得结果');
+  const results = parseSogouWechatResults(html).slice(0, count);
+  if (results.length === 0) throw new Error('微信搜索未返回结果');
+  return results;
+}
+
+/** 公众号活动常用「宣讲会 / 活动预告」这类标题发布，原查询为空时补一次活动语义再试。 */
+async function discoverWechat(
+  query: string,
+  count: number,
+): Promise<{ results: WebSearchResult[]; query: string }> {
+  const attempts = [query, `${query} 宣讲会 活动预告`];
+  for (const [index, attempt] of attempts.entries()) {
+    try {
+      const results = await searchSogouWechat(attempt, count);
+      if (results.length) return { results, query: attempt };
+    } catch (error) {
+      // 只有「确实没结果」才换词重试；验证码与网络错误不重试，避免加倍触发反爬。
+      if (index === 0 && /未返回结果/.test(String(error))) continue;
+      throw error;
+    }
+  }
+  throw new Error('微信搜索未返回结果');
+}
+
 /** 粗粒度相关性判断：结果标题/摘要/URL 去空白后，需至少命中两个查询词才认为相关；
  *  单词查询无法这样判断，视为相关（不触发降级）。 */
 function looksRelevant(query: string, results: WebSearchResult[]): boolean {
@@ -546,14 +645,16 @@ const JOB_BOARD_HOSTS = [
 const SOURCE_RANK: Record<SearchSource, number> = {
   official: 0,
   wechat: 1,
-  'job-board': 2,
-  web: 3,
+  'wechat-search': 2,
+  'job-board': 3,
+  web: 4,
 };
 
 function sourceOf(url: string): SearchSource {
   const host = new URL(url).hostname.toLowerCase();
   const belongs = (domain: string) => host === domain || host.endsWith(`.${domain}`);
   if (belongs('scu.edu.cn')) return 'official';
+  if (host === 'weixin.sogou.com') return 'wechat-search';
   if (belongs('weixin.qq.com')) return 'wechat';
   if (JOB_BOARD_HOSTS.some(belongs)) return 'job-board';
   return 'web';
@@ -581,6 +682,8 @@ function compactResults(
       url: result.url,
       title: compact(result.title).slice(0, SEARCH_TITLE_LIMIT),
       snippet: compact(result.snippet).slice(0, SEARCH_SNIPPET_LIMIT),
+      ...(result.publisher ? { publisher: result.publisher } : {}),
+      ...(result.publishedAt ? { publishedAt: result.publishedAt } : {}),
       ...(annotate ? { source: sourceOf(result.url) } : {}),
     }));
 }
@@ -641,9 +744,16 @@ async function performWebSearch(
 ): Promise<SearchResponse> {
   const startedAt = Date.now();
   const queries = expandQueries(query, options.mode);
-  const settled = await Promise.allSettled(
-    queries.map((item) => searchOnce(item, count, freshness, config)),
-  );
+  // 公众号文章多数不被通用搜索收录，招聘模式再补一路搜狗微信结果页（只取标题与摘要）。
+  const wechatDiscovery =
+    options.mode === 'campus-recruit' ? discoverWechat(query, count) : Promise.resolve(null);
+  const [settled, wechat] = await Promise.all([
+    Promise.allSettled(queries.map((item) => searchOnce(item, count, freshness, config))),
+    wechatDiscovery.then(
+      (value) => ({ ok: true as const, value }),
+      (reason: unknown) => ({ ok: false as const, reason }),
+    ),
+  ]);
   const merged: WebSearchResult[] = [];
   const warnings: string[] = [];
   const errors: unknown[] = [];
@@ -666,6 +776,20 @@ async function performWebSearch(
       merged.push(result);
     }
   });
+  let wechatReport: SearchResponse['wechat'];
+  if (wechat?.ok && wechat.value) {
+    providers.add('sogou-wechat');
+    for (const result of wechat.value.results) {
+      if (seen.has(result.url)) continue;
+      seen.add(result.url);
+      merged.push(result);
+    }
+    wechatReport = { query: wechat.value.query, found: wechat.value.results.length };
+  } else if (wechat && !wechat.ok) {
+    const reason = wechat.reason instanceof Error ? wechat.reason.message : String(wechat.reason);
+    warnings.push(`微信搜索：${reason}`);
+    wechatReport = { error: reason };
+  }
   // 全部子查询都失败时才报错；部分失败仍返回其余来源，并用 warnings 说明缺了哪一路。
   if (merged.length === 0 && errors.length === queries.length) throw errors[0];
   if (switched) warnings.push('必应结果与查询相关性低，已自动改用 360 搜索补查');
@@ -677,6 +801,7 @@ async function performWebSearch(
     ...(config ? {} : { fallback: true }),
     ...(options.mode ? { mode: options.mode, queries } : {}),
     ...(warnings.length > 0 ? { warnings } : {}),
+    ...(wechatReport ? { wechat: wechatReport } : {}),
     results: compactResults(merged, count, options, Boolean(options.mode)),
     cacheHit: false,
     fetchedAt: Date.now(),
