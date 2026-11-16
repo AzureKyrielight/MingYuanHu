@@ -161,7 +161,7 @@ const webTools: ToolDefinition[] = [
     name: 'web_search',
     label: 'web_search',
     description:
-      '搜索公开网页，返回来源链接和短摘要，默认3条。查近期招聘、宣讲、讲座、活动等分散在公众号与各站点的事件信息时传 mode="campus-recruit"（展开官方站/公众号/活动语义词多路检索，默认8条，最多4次请求）；查推免细则、培养方案、通知公告等校园公开政策时传 mode="campus-policy"（精确短语与官方域名约束，默认8条，最多3次请求）。两种模式都按 official/wechat/wechat-search/job-board/web 标注来源，campus-recruit 会额外查搜狗微信结果页（只取标题与摘要）。不要对同一主题反复重发近似查询：两次查询结果仍不相关就换关键词或换搜索服务，而不是继续原样重试。domains/excludeDomains 按域名过滤结果；freshness 由供应商支持情况决定。相同查询可复用短期缓存，需最新结果时 refresh=true。',
+      '搜索公开网页，返回来源链接和短摘要，默认3条。查近期招聘、宣讲、讲座、活动等分散在公众号与各站点的事件信息时传 mode="campus-recruit"（展开官方站/公众号/活动语义词多路检索，默认8条，最多4路通用查询加2次微信补查）；查推免细则、培养方案、通知公告等校园公开政策时传 mode="campus-policy"（精确短语与官方域名约束，默认8条，最多3次请求）。两种模式都按 official/wechat/wechat-search/job-board/web 标注来源，campus-recruit 会额外查搜狗微信结果页（只取标题与摘要）。不要对同一主题反复重发近似查询：两次查询结果仍不相关就换关键词或换搜索服务，而不是继续原样重试。domains/excludeDomains 按域名过滤结果；freshness 由供应商支持情况决定。相同查询可复用短期缓存，需最新结果时 refresh=true。',
     parameters: {
       type: 'object',
       properties: {
