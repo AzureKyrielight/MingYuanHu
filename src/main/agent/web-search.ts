@@ -531,6 +531,9 @@ export function parseSogouWechatResults(html: string): WebSearchResult[] {
     const snippet =
       /<p\b[^>]*\bclass\s*=\s*(["'])[^"']*\btxt-info\b[^"']*\1[^>]*>([\s\S]*?)<\/p>/i.exec(block);
     const account =
+      /<span\b[^>]*\bclass\s*=\s*(["'])[^"']*\ball-time-y2\b[^"']*\1[^>]*>([\s\S]*?)<\/span>/i.exec(
+        block,
+      ) ??
       /<a\b[^>]*\bclass\s*=\s*(["'])[^"']*\baccount\b[^"']*\1[^>]*>([\s\S]*?)<\/a>/i.exec(block);
     const published =
       /\bt\s*=\s*"(\d{9,11})"/i.exec(block)?.[1] ?? /timeConvert\('(\d{9,11})'\)/i.exec(block)?.[1];

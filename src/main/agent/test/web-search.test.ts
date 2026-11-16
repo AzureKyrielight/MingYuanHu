@@ -469,7 +469,7 @@ const sogouPage = (
   `<html><body><ul class="news-list">${items
     .map(
       ({ title, snippet, account, href = '/link?url=abc&type=2', stamp = '1794408855' }) =>
-        `<li id="sogou_vr_11002601_box_0"><div class="txt-box"><h3><a href="${href}" target="_blank">${title}</a></h3><p class="txt-info">${snippet ?? '摘要'}</p><div class="s-p" t="${stamp}"><a class="account" href="/mp?x">${account ?? '川大计算机软件就业'}</a></div></div></li>`,
+        `<li id="sogou_vr_11002601_box_0"><div class="txt-box"><h3><a href="${href}" target="_blank">${title}</a></h3><p class="txt-info">${snippet ?? '摘要'}</p><div class="s-p"><span class="all-time-y2">${account ?? '川大计算机软件就业'}</span><span class="s2"><script>document.write(timeConvert('${stamp}'))</script></span></div></div></li>`,
     )
     .join('')}</ul></body></html>`;
 
